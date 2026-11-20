@@ -6,7 +6,10 @@ import { routes } from "@/config/navigation";
 import { fieldErrorsOf, type ActionResult } from "@/lib/auth/action-result";
 import { isUuid } from "@/lib/auth/active-organization";
 import { setActiveOrganizationCookie } from "@/lib/auth/cookies";
-import { organizationErrorMessage } from "@/lib/auth/errors";
+import {
+  isMembershipsUnavailableError,
+  organizationErrorMessage,
+} from "@/lib/auth/errors";
 import { authMessages } from "@/lib/auth/messages";
 import { safeRedirectPath } from "@/lib/auth/redirects";
 import { listActiveMemberships, requireUser } from "@/lib/auth/session";
@@ -73,7 +76,15 @@ export async function switchOrganizationAction(
   }
 
   const supabase = await createSupabaseServerClient();
-  const memberships = await listActiveMemberships(supabase, user.id);
+  let memberships: Awaited<ReturnType<typeof listActiveMemberships>>;
+  try {
+    memberships = await listActiveMemberships(supabase, user.id);
+  } catch (error) {
+    if (isMembershipsUnavailableError(error)) {
+      return { ok: false, message: authMessages.organizationsUnavailable };
+    }
+    throw error;
+  }
   const membership = memberships.find(
     (item) => item.organizationId === organizationId.toLowerCase(),
   );

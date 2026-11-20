@@ -26,6 +26,8 @@ export const authMessages = {
   organizationCreateFailed:
     "Firmu nije bilo moguće sačuvati. Proverite podatke i pokušajte ponovo.",
   organizationAccessDenied: "Nemate pristup toj organizaciji.",
+  organizationsUnavailable:
+    "Trenutno ne možemo da učitamo podatke vaše firme. Pokušajte ponovo za nekoliko trenutaka.",
 } as const;
 
 /** Error keys that may appear in `?error=` on public pages. Anything else is ignored. */

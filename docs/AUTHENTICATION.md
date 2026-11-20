@@ -221,6 +221,27 @@ no company details, and isn't idempotent. It stays in place, unchanged.
 | Switching                                       | `switchOrganizationAction(id)` checks the id against active memberships before setting the cookie    |
 | No trusted client state                         | the client receives names and ids for display only; the server re-resolves everything                |
 
+**When memberships can't be read** (database or Data API error), this is
+_not_ treated as "no organization".
+
+- `listActiveMemberships()` returns `[]` only for a successful empty result.
+  On a query error it throws `MembershipsUnavailableError`, which has the fixed
+  digest `MEMBERSHIPS_UNAVAILABLE` and no upstream detail. It logs only
+  `[auth] memberships_unavailable { code }`.
+- Render guards (the `(app)` layout, `/onboarding`, `/select-organization`)
+  let it reach the root error boundary `src/app/error.tsx`. The boundary shows
+  "Trenutno ne možemo da učitamo podatke vaše firme. Pokušajte ponovo za
+  nekoliko trenutaka." with **Pokušaj ponovo**, which calls `retry()` and
+  re-runs the same request. The onboarding form is never shown in this
+  state, so no organization can be created by mistake.
+- Post-auth routing (login, `/auth/callback`, `/auth/continue`, password
+  reset) uses the state `unavailable`. It keeps a safe `next` path, but never
+  `/onboarding`, `/select-organization` or guest pages; the fallback is
+  `/dashboard`. The guard there shows the retryable error.
+- `switchOrganizationAction` returns the same safe message.
+- Nothing redirects automatically to an error page, so there is no redirect
+  loop.
+
 Header: active organization name, a switcher (only with 2 or more
 organizations), user initials and name, Settings and Sign out.
 
