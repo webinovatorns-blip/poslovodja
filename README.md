@@ -56,6 +56,29 @@ npx playwright install chromium
 
 Set `PLAYWRIGHT_SKIP_BUILD=1` to run E2E against an existing `next build`.
 
+## Continuous integration
+
+GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request to
+`main`, on pushes to `main` and manually (`workflow_dispatch`). The job uses
+Node.js 22, installs dependencies with `npm ci` and runs:
+
+1. `npm run format:check`
+2. `npm run lint`
+3. `npm run typecheck`
+4. `npm run test` (unit tests)
+5. `npm run build` (production build, with placeholder public env values only)
+
+The workflow has read-only permissions and uses no secrets. A new push cancels
+the previous run for the same pull request.
+
+**Next CI phase:** SQL (pgTAP), integration and Playwright tests need the full
+local Supabase stack in Docker, so CI doesn't run them yet. Run them locally
+before merging:
+
+```bash
+npm run db:start && npm run db:test && npm run test:integration && npm run test:e2e
+```
+
 ## Local Supabase
 
 The Supabase CLI is a dev dependency (`npx supabase ...`); no global install
