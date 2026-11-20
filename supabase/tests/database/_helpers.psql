@@ -1,0 +1,124 @@
+-- Shared pgTAP helpers and fixtures. Included with `\ir _helpers.psql` from
+-- each *.test.sql file AFTER `begin;`, so everything here is rolled back.
+-- The .psql extension keeps pg_prove from running this file as a test.
+--
+-- Fixture:
+--   org "a" (created by owner_a through create_organization):
+--     owner_a (owner), admin_a (admin), manager_a (manager), worker_a (worker)
+--   org "b" (created by owner_b): owner_b (owner)
+--   outsider: confirmed user with no memberships
+
+create extension if not exists pgtap with schema extensions;
+
+create schema tests;
+grant usage on schema tests to anon, authenticated;
+
+create table tests.fixture_users (label text primary key, id uuid not null, email text not null);
+create table tests.fixture_orgs (label text primary key, id uuid not null);
+grant select on tests.fixture_users, tests.fixture_orgs to anon, authenticated;
+
+create function tests.create_user(p_label text, p_meta jsonb default '{}'::jsonb)
+returns uuid
+language plpgsql
+as $$
+declare
+  v_id uuid := gen_random_uuid();
+  v_email text := p_label || '@poslovodja.test';
+begin
+  insert into auth.users (
+    instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,
+    raw_app_meta_data, raw_user_meta_data, created_at, updated_at
+  ) values (
+    '00000000-0000-0000-0000-000000000000', v_id, 'authenticated', 'authenticated',
+    v_email, '', now(), '{"provider":"email","providers":["email"]}'::jsonb,
+    p_meta, now(), now()
+  );
+  insert into tests.fixture_users (label, id, email) values (p_label, v_id, v_email);
+  return v_id;
+end;
+$$;
+
+create function tests.user_id(p_label text)
+returns uuid
+language sql
+stable
+as $$ select id from tests.fixture_users where label = p_label $$;
+
+create function tests.org_id(p_label text)
+returns uuid
+language sql
+stable
+as $$ select id from tests.fixture_orgs where label = p_label $$;
+
+-- Act as a signed-in user, exactly like PostgREST does for a user JWT.
+create function tests.authenticate_as(p_label text)
+returns void
+language plpgsql
+as $$
+declare
+  v_user tests.fixture_users%rowtype;
+begin
+  select * into strict v_user from tests.fixture_users where label = p_label;
+  perform set_config(
+    'request.jwt.claims',
+    json_build_object('sub', v_user.id, 'role', 'authenticated', 'email', v_user.email)::text,
+    true
+  );
+  execute 'set local role authenticated';
+end;
+$$;
+
+-- Act as an anonymous API client (publishable/anon key, no user).
+create function tests.authenticate_as_anon()
+returns void
+language plpgsql
+as $$
+begin
+  perform set_config('request.jwt.claims', json_build_object('role', 'anon')::text, true);
+  execute 'set local role anon';
+end;
+$$;
+
+-- Back to the test runner role (postgres).
+create function tests.clear_authentication()
+returns void
+language plpgsql
+as $$
+begin
+  perform set_config('request.jwt.claims', '', true);
+  execute 'reset role';
+end;
+$$;
+
+grant execute on all functions in schema tests to anon, authenticated;
+
+-- --------------------------------------------------------------------------
+-- Fixture data
+-- --------------------------------------------------------------------------
+select tests.create_user('owner_a', '{"full_name": "Owner A"}');
+select tests.create_user('admin_a', '{"full_name": "Admin A"}');
+select tests.create_user('manager_a', '{"full_name": "Manager A"}');
+select tests.create_user('worker_a', '{"full_name": "Worker A"}');
+select tests.create_user('owner_b', '{"full_name": "Owner B"}');
+select tests.create_user('outsider', '{"full_name": "Outsider"}');
+
+-- Organizations are created through the real RPC, as their owners.
+select tests.authenticate_as('owner_a');
+create temporary table _org_a on commit drop as
+  select public.create_organization('Firma A', 'firma-a', 'elektro') as id;
+select tests.clear_authentication();
+insert into tests.fixture_orgs select 'a', id from _org_a;
+
+select tests.authenticate_as('owner_b');
+create temporary table _org_b on commit drop as
+  select public.create_organization('Firma B', 'firma-b', 'vodoinstalater') as id;
+select tests.clear_authentication();
+insert into tests.fixture_orgs select 'b', id from _org_b;
+
+-- Additional members of org A (fixture setup as postgres; the app path for
+-- this is invitations, which are tested separately).
+insert into public.memberships (organization_id, user_id, role, status)
+values
+  (tests.org_id('a'), tests.user_id('admin_a'), 'admin', 'active'),
+  (tests.org_id('a'), tests.user_id('manager_a'), 'manager', 'active'),
+  (tests.org_id('a'), tests.user_id('worker_a'), 'worker', 'active');

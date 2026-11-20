@@ -1,36 +1,123 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Poslovođa
 
-## Getting Started
+Mobile-first B2B SaaS for tradespeople and small field-service companies in
+Serbia: clients, jobs, quotes, expenses, payments, crews and profit per job.
 
-First, run the development server:
+> **Status:** Phase 2: secure multi-tenant Supabase foundation (schema, RLS,
+> RPCs, tests). No auth UI or business modules yet. See [docs/PRODUCT.md](docs/PRODUCT.md).
+
+## Tech stack
+
+Next.js 16 (App Router) · TypeScript (strict) · Tailwind CSS v4 · shadcn/ui ·
+Supabase JS · Zod · React Hook Form · Vitest · Playwright · ESLint · Prettier
+
+## Requirements
+
+- Node.js 20.9+ (22 LTS recommended)
+- npm 10+
+- Docker (Docker Desktop, OrbStack, Colima, …), only for the local Supabase stack
+
+## Getting started
 
 ```bash
+npm install
+cp .env.example .env.local   # then fill in values (see "Local Supabase")
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open http://localhost:3000.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+To run E2E tests locally the first time, install the Playwright browser:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npx playwright install chromium
+```
 
-## Learn More
+## Scripts
 
-To learn more about Next.js, take a look at the following resources:
+| Script                     | What it does                                                      |
+| -------------------------- | ----------------------------------------------------------------- |
+| `npm run dev`              | Start the dev server                                              |
+| `npm run build`            | Production build                                                  |
+| `npm run start`            | Serve the production build                                        |
+| `npm run lint`             | ESLint                                                            |
+| `npm run typecheck`        | Generate Next route types, then `tsc --noEmit`                    |
+| `npm run format`           | Format with Prettier                                              |
+| `npm run format:check`     | Check formatting                                                  |
+| `npm run test`             | Unit tests (Vitest, single run)                                   |
+| `npm run test:watch`       | Unit tests in watch mode                                          |
+| `npm run test:e2e`         | Build, start on :3100 and run Playwright (desktop + mobile)       |
+| `npm run test:integration` | HTTP tests against the local Supabase stack                       |
+| `npm run db:*`             | Local Supabase: `start`, `stop`, `reset`, `test`, `lint`, `types` |
+| `npm run check`            | lint + typecheck + format:check + unit tests                      |
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Set `PLAYWRIGHT_SKIP_BUILD=1` to run E2E against an existing `next build`.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Local Supabase
 
-## Deploy on Vercel
+The Supabase CLI is a dev dependency (`npx supabase ...`); no global install
+is needed.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```bash
+npm run db:start      # first run downloads Docker images (a few minutes)
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+The command prints URLs and keys. Copy them into `.env.local`:
+
+```bash
+npx supabase status
+```
+
+| `supabase status`                      | `.env.local`                           |
+| -------------------------------------- | -------------------------------------- |
+| API URL (`http://127.0.0.1:54321`)     | `NEXT_PUBLIC_SUPABASE_URL`             |
+| Publishable key (`sb_publishable_...`) | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` |
+| Secret key (`sb_secret_...`)           | `SUPABASE_SECRET_KEY`                  |
+
+The local keys are the well-known development keys of the CLI. Never use
+hosted-project keys in tests.
+
+Useful commands:
+
+```bash
+npm run db:reset          # re-apply all migrations + supabase/seed.sql
+npm run db:test           # pgTAP database tests
+npm run test:integration  # HTTP tests against the local stack (auto-reads `supabase status`)
+npm run db:types          # regenerate src/types/database.ts after schema changes
+npm run db:lint           # lint SQL functions
+npm run db:stop
+```
+
+Studio (DB browser): http://127.0.0.1:54323. Seed accounts (password
+`poslovodja-dev-123`): `vlasnik@poslovodja.test` (owner),
+`radnik@poslovodja.test` (worker), `drugi@poslovodja.test` (other company).
+
+Integration tests can also target a stack on custom ports by exporting
+`SUPABASE_TEST_URL`, `SUPABASE_TEST_PUBLISHABLE_KEY` and
+`SUPABASE_TEST_SECRET_KEY`. Only local URLs are accepted.
+
+Schema changes: `npx supabase migration new <name>`, then edit the file and run
+`npm run db:reset && npm run db:test && npm run db:types`. See
+[docs/DATABASE.md](docs/DATABASE.md).
+
+## Environment variables
+
+See [.env.example](.env.example). Never commit real keys — `.env*` files other
+than `.env.example` are git-ignored.
+
+| Variable                               | Exposed to browser | Description                                                    |
+| -------------------------------------- | ------------------ | -------------------------------------------------------------- |
+| `NEXT_PUBLIC_SUPABASE_URL`             | yes                | Supabase API URL                                               |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | yes                | Publishable (or legacy anon) key; RLS applies                  |
+| `SUPABASE_SECRET_KEY`                  | **no**             | Secret (or legacy service_role) key; bypasses RLS; server only |
+
+In development the server logs which variables are missing (names only).
+Pages that don't use Supabase keep working without them.
+
+## Documentation
+
+- [docs/PRODUCT.md](docs/PRODUCT.md) — product, users, modules, roadmap
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): structure, layout, conventions
+- [docs/DATABASE.md](docs/DATABASE.md): tables, relations, RPCs, processes, commands
+- [docs/SECURITY.md](docs/SECURITY.md): roles, RLS, key handling, open risks
+- [CLAUDE.md](CLAUDE.md) — rules for AI coding agents
