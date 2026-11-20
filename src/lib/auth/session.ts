@@ -60,6 +60,30 @@ export type AuthUserResult =
   | { status: "unavailable" };
 
 /**
+ * Runs a Supabase Auth call with the Auth deadline and tells "Auth couldn't
+ * be reached" (deadline exceeded, timeout, network error, 5xx from the
+ * gateway: AuthRetryableFetchError) apart from a real answer. A real answer
+ * may still carry an error (invalid code, expired session …).
+ */
+export async function callAuth<T extends { error: unknown }>(
+  call: Promise<T>,
+): Promise<{ unavailable: true } | { unavailable: false; result: T }> {
+  let result: T;
+  try {
+    result = await withAuthDeadline(call);
+  } catch {
+    // Deadline exceeded (already logged with a safe code).
+    return { unavailable: true };
+  }
+  if (result.error && isAuthRetryableFetchError(result.error)) {
+    // Safe log: HTTP status only (0 = timeout / network), never the message.
+    console.error("[auth] auth_unavailable", { status: result.error.status });
+    return { unavailable: true };
+  }
+  return { unavailable: false, result };
+}
+
+/**
  * supabase.auth.getUser() with a deadline, classified. Callers must fail
  * closed on "unavailable" (no access), but must not sign the user out
  * because of it: the outage is temporary and the session may be valid.
@@ -67,20 +91,11 @@ export type AuthUserResult =
 export async function getAuthUser(
   supabase: SupabaseServerClient,
 ): Promise<AuthUserResult> {
-  let result: Awaited<ReturnType<SupabaseServerClient["auth"]["getUser"]>>;
-  try {
-    result = await withAuthDeadline(supabase.auth.getUser());
-  } catch {
-    // Deadline exceeded (already logged with a safe code).
+  const call = await callAuth(supabase.auth.getUser());
+  if (call.unavailable) {
     return { status: "unavailable" };
   }
-
-  const { data, error } = result;
-  if (error && isAuthRetryableFetchError(error)) {
-    // Safe log: HTTP status only (0 = timeout / network), never the message.
-    console.error("[auth] auth_unavailable", { status: error.status });
-    return { status: "unavailable" };
-  }
+  const { data, error } = call.result;
   if (error || !data.user) {
     return { status: "signed-out" };
   }

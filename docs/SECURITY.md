@@ -194,8 +194,8 @@ Full flows are in [AUTHENTICATION.md](AUTHENTICATION.md).
 
 ## Upstream timeouts (fail closed)
 
-Every server-side Supabase request has a timeout (6 s per request, 7 s for a
-whole Auth call, see AUTHENTICATION.md → "Timeouts and outages"). An
+Every server-side Supabase request has a timeout (default 6 s per request,
+7 s for a whole Auth call, see AUTHENTICATION.md → "Timeouts and outages"). An
 unreachable Auth or Data API can't hold server resources indefinitely or
 freeze a page. A timeout becomes a normal Supabase error and is handled
 fail-closed:
@@ -205,6 +205,12 @@ fail-closed:
 - Auth unknown never signs the user out either, so a short outage doesn't
   log everyone out, and it doesn't cause a `/login` ⇄ `/auth/continue` loop.
 - Data API errors never mean "no organizations" (no onboarding redirect).
+- In `/auth/callback`, an unreachable Auth never means "link invalid". The
+  retry page repeats the request without echoing the code (`href=""`,
+  `no-store`, `no-referrer`). Only a real rejection from Auth shows
+  "link nije važeći".
+- The optional env overrides are bounded (1–30 s). An invalid value can't
+  disable the timeout; it falls back to the default.
 - Logs contain only stable codes (`[supabase] request_timeout`,
   `[supabase] auth_deadline_exceeded`), never URLs, tokens, cookies or keys.
 - New server-side clients must spread `serverClientRequestOptions()`.

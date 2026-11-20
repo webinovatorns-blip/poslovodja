@@ -52,6 +52,8 @@ import {
 import {
   AuthDeadlineExceededError,
   createTimeoutFetch,
+  getAuthDeadlineMs,
+  getRequestTimeoutMs,
   SUPABASE_AUTH_DEADLINE_MS,
   SUPABASE_REQUEST_TIMEOUT_MS,
   withAuthDeadline,
@@ -206,10 +208,194 @@ describe("createTimeoutFetch", () => {
     expect(consoleError).not.toHaveBeenCalled();
   });
 
-  it("passes a fast response through unchanged", async () => {
-    const ok = new Response("[]", { status: 200 });
+  it("passes a fast response through unchanged (status, headers, body)", async () => {
+    const ok = new Response('[{"id":1}]', {
+      status: 206,
+      statusText: "Partial Content",
+      headers: { "content-range": "0-0/1" },
+    });
     const timedFetch = createTimeoutFetch({ fetchImpl: vi.fn(async () => ok) });
-    await expect(timedFetch(`${SUPABASE_URL}/rest/v1/x`)).resolves.toBe(ok);
+    const response = await timedFetch(`${SUPABASE_URL}/rest/v1/x`);
+    expect(response.status).toBe(206);
+    expect(response.statusText).toBe("Partial Content");
+    expect(response.headers.get("content-range")).toBe("0-0/1");
+    await expect(response.json()).resolves.toEqual([{ id: 1 }]);
+  });
+
+  it("a body that stalls after the headers is aborted by the same timeout", async () => {
+    const stalledFetch = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) =>
+        new Response(
+          new ReadableStream({
+            start(stream) {
+              stream.enqueue(new TextEncoder().encode("[")); // ...and nothing more
+              init?.signal?.addEventListener("abort", () =>
+                stream.error(init.signal!.reason),
+              );
+            },
+          }),
+        ),
+    );
+    const timedFetch = createTimeoutFetch({ fetchImpl: stalledFetch });
+    const response = await timedFetch(`${SUPABASE_URL}/rest/v1/x`);
+    const body = track(response.text());
+    await vi.advanceTimersByTimeAsync(SUPABASE_REQUEST_TIMEOUT_MS);
+    expect(body.error).toMatchObject({ name: "TimeoutError" });
+  });
+});
+
+describe("createTimeoutFetch cleans up its timer and listener", () => {
+  /** A caller signal whose listeners we can count. */
+  function trackedSignal() {
+    const controller = new AbortController();
+    const add = vi.spyOn(controller.signal, "addEventListener");
+    const remove = vi.spyOn(controller.signal, "removeEventListener");
+    return { controller, signal: controller.signal, add, remove };
+  }
+
+  function expectCleanedUp(caller: ReturnType<typeof trackedSignal>) {
+    expect(vi.getTimerCount()).toBe(0);
+    expect(caller.add).toHaveBeenCalledTimes(1);
+    expect(caller.remove).toHaveBeenCalledWith("abort", caller.add.mock.calls[0][1]);
+  }
+
+  it("after success, once the body has been read", async () => {
+    const caller = trackedSignal();
+    const timedFetch = createTimeoutFetch({
+      fetchImpl: vi.fn(async () => new Response("[]")),
+    });
+    const response = await timedFetch(`${SUPABASE_URL}/rest/v1/x`, {
+      signal: caller.signal,
+    });
+    expect(vi.getTimerCount()).toBe(1); // still guarding the body
+    await response.text();
+    expectCleanedUp(caller);
+  });
+
+  it("after success without a body (204)", async () => {
+    const caller = trackedSignal();
+    const timedFetch = createTimeoutFetch({
+      fetchImpl: vi.fn(async () => new Response(null, { status: 204 })),
+    });
+    await timedFetch(`${SUPABASE_URL}/rest/v1/x`, { signal: caller.signal });
+    expectCleanedUp(caller);
+  });
+
+  it("after the body is cancelled", async () => {
+    const caller = trackedSignal();
+    const timedFetch = createTimeoutFetch({
+      fetchImpl: vi.fn(async () => new Response("[]")),
+    });
+    const response = await timedFetch(`${SUPABASE_URL}/rest/v1/x`, {
+      signal: caller.signal,
+    });
+    await response.body!.cancel();
+    expectCleanedUp(caller);
+  });
+
+  it("after a fetch error (connection refused)", async () => {
+    const caller = trackedSignal();
+    const timedFetch = createTimeoutFetch({
+      fetchImpl: vi.fn(async () => {
+        throw new TypeError("fetch failed");
+      }),
+    });
+    await expect(
+      timedFetch(`${SUPABASE_URL}/rest/v1/x`, { signal: caller.signal }),
+    ).rejects.toThrow("fetch failed");
+    expectCleanedUp(caller);
+    expect(consoleError).not.toHaveBeenCalled(); // not a timeout
+  });
+
+  it("after a body error mid-stream", async () => {
+    const caller = trackedSignal();
+    const timedFetch = createTimeoutFetch({
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(
+            new ReadableStream({
+              pull(stream) {
+                stream.error(new TypeError("terminated"));
+              },
+            }),
+          ),
+      ),
+    });
+    const response = await timedFetch(`${SUPABASE_URL}/rest/v1/x`, {
+      signal: caller.signal,
+    });
+    await expect(response.text()).rejects.toThrow("terminated");
+    expectCleanedUp(caller);
+  });
+
+  it("after the caller aborts", async () => {
+    const caller = trackedSignal();
+    const timedFetch = createTimeoutFetch({ fetchImpl: hangingFetch });
+    const result = track(
+      timedFetch(`${SUPABASE_URL}/rest/v1/x`, { signal: caller.signal }),
+    );
+    caller.controller.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(result.error).toMatchObject({ name: "AbortError" });
+    expectCleanedUp(caller);
+  });
+
+  it("with an already aborted caller signal (no listener left behind)", async () => {
+    const caller = trackedSignal();
+    caller.controller.abort();
+    const timedFetch = createTimeoutFetch({ fetchImpl: hangingFetch });
+    await expect(
+      timedFetch(`${SUPABASE_URL}/rest/v1/x`, { signal: caller.signal }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(vi.getTimerCount()).toBe(0);
+    expect(caller.add).not.toHaveBeenCalled();
+  });
+
+  it("after the timeout fires", async () => {
+    const caller = trackedSignal();
+    const timedFetch = createTimeoutFetch({ fetchImpl: hangingFetch });
+    track(timedFetch(`${SUPABASE_URL}/rest/v1/x`, { signal: caller.signal }));
+    await vi.advanceTimersByTimeAsync(SUPABASE_REQUEST_TIMEOUT_MS);
+    expectCleanedUp(caller);
+  });
+
+  it("withAuthDeadline clears its timer when the call settles first", async () => {
+    await withAuthDeadline(Promise.resolve({ error: null }));
+    await expect(withAuthDeadline(Promise.reject(new Error("x")))).rejects.toThrow("x");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("timeout settings (optional server env)", () => {
+  it("defaults are bounded and the Auth deadline exceeds one request", () => {
+    expect(getRequestTimeoutMs()).toBe(6_000);
+    expect(getAuthDeadlineMs()).toBe(7_000);
+    expect(SUPABASE_AUTH_DEADLINE_MS).toBeGreaterThan(SUPABASE_REQUEST_TIMEOUT_MS);
+  });
+
+  it("valid overrides are used", () => {
+    vi.stubEnv("SUPABASE_REQUEST_TIMEOUT_MS", "4000");
+    vi.stubEnv("SUPABASE_AUTH_DEADLINE_MS", "5000");
+    expect(getRequestTimeoutMs()).toBe(4_000);
+    expect(getAuthDeadlineMs()).toBe(5_000);
+  });
+
+  it.each(["0", "-1", "999", "30001", "abc", "5000ms", "1e3", "Infinity", "6000.5"])(
+    "an unsafe value (%s) falls back to the default",
+    (value) => {
+      vi.stubEnv("SUPABASE_REQUEST_TIMEOUT_MS", value);
+      vi.stubEnv("SUPABASE_AUTH_DEADLINE_MS", value);
+      expect(getRequestTimeoutMs()).toBe(SUPABASE_REQUEST_TIMEOUT_MS);
+      expect(getAuthDeadlineMs()).toBe(SUPABASE_AUTH_DEADLINE_MS);
+    },
+  );
+
+  it("the client fetch picks up an override per request", async () => {
+    vi.stubEnv("SUPABASE_REQUEST_TIMEOUT_MS", "2000");
+    const timedFetch = createTimeoutFetch({ fetchImpl: hangingFetch });
+    const result = track(timedFetch(`${SUPABASE_URL}/rest/v1/x`));
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(result.error).toMatchObject({ name: "TimeoutError" });
   });
 });
 
