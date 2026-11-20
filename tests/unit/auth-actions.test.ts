@@ -37,11 +37,18 @@ import {
   updatePasswordAction,
 } from "@/lib/auth/actions";
 import { authMessages } from "@/lib/auth/messages";
-import { requireOrganization } from "@/lib/auth/session";
+import {
+  getActiveOrganization,
+  MembershipsUnavailableError,
+  requireOrganization,
+} from "@/lib/auth/session";
 import {
   createOrganizationAction,
   switchOrganizationAction,
 } from "@/lib/organizations/actions";
+import { GET as authContinue } from "@/app/auth/continue/route";
+import { GET as authCallback } from "@/app/auth/callback/route";
+import { NextRequest } from "next/server";
 
 const ORG_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const ORG_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -428,5 +435,109 @@ describe("switchOrganizationAction", () => {
       memberships: [{ ...memberships[0], status: "suspended" }],
     });
     expect(await expectRedirect(requireOrganization())).toBe("/onboarding");
+  });
+});
+
+describe("membership read failures", () => {
+  const membershipsError = {
+    code: "PGRST000",
+    message: `Could not connect ${LEAKY_DETAILS}`,
+  };
+
+  function spyConsole() {
+    return [
+      vi.spyOn(console, "log"),
+      vi.spyOn(console, "error"),
+      vi.spyOn(console, "warn"),
+    ];
+  }
+
+  function expectNoLeaks(spies: ReturnType<typeof spyConsole>, ...values: unknown[]) {
+    for (const value of values) {
+      expect(JSON.stringify(value) ?? "").not.toMatch(/PLACEHOLDER|db\.internal/);
+    }
+    for (const spy of spies) {
+      for (const call of spy.mock.calls) {
+        expect(JSON.stringify(call)).not.toMatch(/PLACEHOLDER/);
+      }
+    }
+  }
+
+  it("sign-in does not send the user to onboarding", async () => {
+    const spies = spyConsole();
+    setup({ membershipsError });
+    const location = await expectRedirect(
+      signInAction({ email: "marko@primer.rs", password: "x" }),
+    );
+    expect(location).toBe("/dashboard");
+    expectNoLeaks(spies, location);
+  });
+
+  it("sign-in keeps a safe next path but never an org-setup page", async () => {
+    setup({ membershipsError });
+    expect(
+      await expectRedirect(
+        signInAction({ email: "marko@primer.rs", password: "x", next: "/jobs" }),
+      ),
+    ).toBe("/jobs");
+    expect(
+      await expectRedirect(
+        signInAction({ email: "marko@primer.rs", password: "x", next: "/onboarding" }),
+      ),
+    ).toBe("/dashboard");
+  });
+
+  it("/auth/continue does not send the user to onboarding", async () => {
+    setup({ membershipsError });
+    const location = await expectRedirect(
+      authContinue(new NextRequest("http://localhost:3000/auth/continue")),
+    );
+    expect(location).toBe("/dashboard");
+  });
+
+  it("/auth/callback (email confirmation) does not send the user to onboarding", async () => {
+    setup({ membershipsError });
+    const location = await expectRedirect(
+      authCallback(
+        new NextRequest(
+          "http://localhost:3000/auth/callback?code=PLACEHOLDER-CODE&next=%2Fonboarding",
+        ),
+      ),
+    );
+    expect(location).toBe("/dashboard");
+  });
+
+  it("requireOrganization() throws a detail-free error instead of redirecting", async () => {
+    const spies = spyConsole();
+    setup({ membershipsError }, { [ACTIVE_ORGANIZATION_COOKIE]: ORG_A });
+    const error = await requireOrganization().catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(MembershipsUnavailableError);
+    expect(error).not.toBeInstanceOf(RedirectSignal);
+    expectNoLeaks(spies, String(error), (error as Error).message);
+  });
+
+  it("getActiveOrganization() (onboarding gate) never reports 'no organization'", async () => {
+    setup({ membershipsError });
+    await expect(getActiveOrganization()).rejects.toBeInstanceOf(
+      MembershipsUnavailableError,
+    );
+  });
+
+  it("switching returns a retryable message, not access denied", async () => {
+    const spies = spyConsole();
+    const { cookies } = setup({ membershipsError });
+    const result = await switchOrganizationAction(ORG_A);
+    expect(result).toEqual({ ok: false, message: authMessages.membershipsUnavailable });
+    expect(result).not.toEqual({
+      ok: false,
+      message: authMessages.organizationAccessDenied,
+    });
+    expect(cookies.set).not.toHaveBeenCalled();
+    expectNoLeaks(spies, result);
+  });
+
+  it("a signed-out user is still sent to /login", async () => {
+    setup({ userId: null, membershipsError });
+    expect(await expectRedirect(requireOrganization())).toBe("/login");
   });
 });

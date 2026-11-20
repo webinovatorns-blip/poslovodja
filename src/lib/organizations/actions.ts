@@ -73,8 +73,12 @@ export async function switchOrganizationAction(
   }
 
   const supabase = await createSupabaseServerClient();
-  const memberships = await listActiveMemberships(supabase, user.id);
-  const membership = memberships.find(
+  const result = await listActiveMemberships(supabase, user.id);
+  if (!result.ok) {
+    // Unknown, not denied: don't claim the user has no access.
+    return { ok: false, message: authMessages.membershipsUnavailable };
+  }
+  const membership = result.memberships.find(
     (item) => item.organizationId === organizationId.toLowerCase(),
   );
   if (!membership) {

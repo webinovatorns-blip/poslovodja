@@ -39,6 +39,36 @@ export type CurrentUser = {
   fullName: string | null;
 };
 
+/**
+ * Result of reading the caller's memberships. `ok: false` means the read
+ * itself failed (database/PostgREST error); it does NOT mean "no
+ * memberships" and must never be treated as such.
+ */
+export type MembershipsReadResult =
+  { ok: true; memberships: OrganizationMembership[] } | { ok: false };
+
+/**
+ * Thrown by the guards when memberships can't be read. Carries no upstream
+ * error details. Pages render a retryable "temporarily unavailable" state
+ * for it instead of sending the user to onboarding.
+ */
+export class MembershipsUnavailableError extends Error {
+  constructor() {
+    super("Memberships are temporarily unavailable.");
+    this.name = "MembershipsUnavailableError";
+  }
+}
+
+export function isMembershipsUnavailableError(
+  error: unknown,
+): error is MembershipsUnavailableError {
+  return error instanceof MembershipsUnavailableError;
+}
+
+export type ActiveOrganizationContext = ActiveOrganizationResolution & {
+  user: CurrentUser;
+};
+
 export type OrganizationContext = {
   user: CurrentUser;
   organization: OrganizationMembership;
@@ -76,23 +106,28 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
   };
 });
 
-/** Active memberships of `userId`, loaded through RLS. */
+/**
+ * Active memberships of `userId`, loaded through RLS.
+ * A failed read returns `{ ok: false }` (no error details), never `[]`.
+ */
 export async function listActiveMemberships(
   supabase: SupabaseServerClient,
   userId: string,
-): Promise<OrganizationMembership[]> {
+): Promise<MembershipsReadResult> {
   const { data, error } = await supabase
     .from("memberships")
     .select("role, status, organization:organizations!inner(id, name)")
     .eq("user_id", userId)
     .eq("status", "active");
 
-  if (error || !data) {
-    return [];
+  if (error || !Array.isArray(data)) {
+    // Never log or forward the upstream error: it may contain internals.
+    return { ok: false };
   }
 
-  return (
-    data
+  return {
+    ok: true,
+    memberships: data
       // Defense in depth: never rely on the query filter alone.
       .filter((row) => row.status === "active")
       .map((row) => ({
@@ -100,8 +135,8 @@ export async function listActiveMemberships(
         organizationName: row.organization.name,
         role: row.role,
         status: row.status,
-      }))
-  );
+      })),
+  };
 }
 
 async function readPreferredOrganizationId(): Promise<string | null> {
@@ -111,8 +146,14 @@ async function readPreferredOrganizationId(): Promise<string | null> {
 const resolveForUser = cache(
   async (userId: string): Promise<ActiveOrganizationResolution> => {
     const supabase = await createSupabaseServerClient();
-    const memberships = await listActiveMemberships(supabase, userId);
-    return resolveActiveOrganization(memberships, await readPreferredOrganizationId());
+    const result = await listActiveMemberships(supabase, userId);
+    if (!result.ok) {
+      throw new MembershipsUnavailableError();
+    }
+    return resolveActiveOrganization(
+      result.memberships,
+      await readPreferredOrganizationId(),
+    );
   },
 );
 
@@ -125,10 +166,11 @@ export async function requireUser(): Promise<CurrentUser> {
   return user;
 }
 
-/** Resolution of the active organization for the signed-in user. */
-export async function getActiveOrganization(): Promise<
-  ActiveOrganizationResolution & { user: CurrentUser }
-> {
+/**
+ * Resolution of the active organization for the signed-in user.
+ * Throws MembershipsUnavailableError when memberships can't be read.
+ */
+export async function getActiveOrganization(): Promise<ActiveOrganizationContext> {
   const user = await requireUser();
   const resolution = await resolveForUser(user.id);
   return { ...resolution, user };
@@ -137,6 +179,8 @@ export async function getActiveOrganization(): Promise<
 /**
  * The verified active organization, or a redirect:
  * no organization → /onboarding; several and none chosen → /select-organization.
+ * Throws MembershipsUnavailableError when memberships can't be read (never
+ * redirects to /onboarding in that case).
  */
 export async function requireOrganization(): Promise<OrganizationContext> {
   const resolution = await getActiveOrganization();
@@ -170,15 +214,25 @@ export async function requireOrganizationRole(
   return context;
 }
 
-/** Destination for a user who just signed in (or visits /login while signed in). */
+/**
+ * Destination for a user who just signed in (or visits /login while signed in).
+ *
+ * If memberships can't be read, the organization state is unknown: the user
+ * is NOT sent to /onboarding. They go to the requested in-app page (or the
+ * dashboard), whose server guard re-reads memberships and shows a retryable
+ * "temporarily unavailable" state until the read succeeds.
+ */
 export async function resolvePostAuthPath(
   supabase: SupabaseServerClient,
   userId: string,
   next?: string | null,
 ): Promise<string> {
-  const memberships = await listActiveMemberships(supabase, userId);
+  const result = await listActiveMemberships(supabase, userId);
+  if (!result.ok) {
+    return decidePostAuthDestination("selected", next);
+  }
   const resolution = resolveActiveOrganization(
-    memberships,
+    result.memberships,
     await readPreferredOrganizationId(),
   );
   return decidePostAuthDestination(resolution.state, next);

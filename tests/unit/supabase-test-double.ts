@@ -41,6 +41,8 @@ export function createSupabaseDouble(
   options: {
     userId?: string | null;
     memberships?: MembershipRow[];
+    /** When set, the memberships query fails with this (PostgREST-like) error. */
+    membershipsError?: { code: string; message: string };
   } = {},
 ) {
   const userId =
@@ -83,7 +85,11 @@ export function createSupabaseDouble(
     from: vi.fn((table: string) => {
       const builder =
         table === "memberships"
-          ? queryBuilder({ data: memberships, error: null })
+          ? queryBuilder(
+              options.membershipsError
+                ? { data: null, error: options.membershipsError }
+                : { data: memberships, error: null },
+            )
           : queryBuilder({ data: { full_name: "Marko Marković" }, error: null });
       builders.push({ table, builder });
       return builder;

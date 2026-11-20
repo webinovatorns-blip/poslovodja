@@ -4,6 +4,7 @@ import { Suspense } from "react";
 
 import { OrganizationPicker } from "@/components/onboarding/organization-picker";
 import { LoadingState } from "@/components/shared/loading-state";
+import { MembershipsUnavailableState } from "@/components/shared/memberships-unavailable-state";
 import {
   Card,
   CardContent,
@@ -14,7 +15,11 @@ import {
 import { routes } from "@/config/navigation";
 import { roleLabels } from "@/config/roles";
 import { safeRedirectPath } from "@/lib/auth/redirects";
-import { getActiveOrganization } from "@/lib/auth/session";
+import {
+  getActiveOrganization,
+  isMembershipsUnavailableError,
+  type ActiveOrganizationContext,
+} from "@/lib/auth/session";
 
 export const metadata: Metadata = { title: "Izbor organizacije" };
 
@@ -23,7 +28,15 @@ async function Picker({
 }: {
   searchParams: PageProps<"/select-organization">["searchParams"];
 }) {
-  const resolution = await getActiveOrganization();
+  let resolution: ActiveOrganizationContext;
+  try {
+    resolution = await getActiveOrganization();
+  } catch (error) {
+    if (isMembershipsUnavailableError(error)) {
+      return <MembershipsUnavailableState />;
+    }
+    throw error;
+  }
   if (resolution.state === "none") {
     redirect(routes.onboarding);
   }

@@ -221,6 +221,25 @@ no company details, and isn't idempotent. It stays in place, unchanged.
 | Switching                                       | `switchOrganizationAction(id)` checks the id against active memberships before setting the cookie    |
 | No trusted client state                         | the client receives names and ids for display only; the server re-resolves everything                |
 
+### When memberships can't be read
+
+A failed membership read (database or PostgREST error) is **not** the same as
+"no organization". `listActiveMemberships()` returns
+`{ ok: true, memberships } | { ok: false }` and never `[]` on failure; the
+upstream error is neither logged nor returned.
+
+| Caller                                                                                | On a failed read                                                                                                    |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `requireOrganization()`, `getActiveOrganization()`                                    | throw `MembershipsUnavailableError` (no details) instead of redirecting                                             |
+| `(app)/layout.tsx`, `/onboarding`, `/select-organization`                             | catch it and render `MembershipsUnavailableState` (Serbian message, retry = `router.refresh()`); no onboarding form |
+| `resolvePostAuthPath()` (sign-in, `/auth/continue`, `/auth/callback`, password reset) | goes to the safe in-app target (`next` or `/dashboard`, never an org-setup page); its guard then shows the error    |
+| `switchOrganizationAction()`                                                          | returns `authMessages.membershipsUnavailable`, not "access denied"; the cookie is not changed                       |
+
+The user is never sent to `/onboarding` because of a failed read, so an outage
+can't lead to a duplicate organization. Once the read succeeds again, retrying
+applies the normal rules (onboarding, picker or the app). Other errors in
+`(app)` pages still use `(app)/error.tsx`.
+
 Header: active organization name, a switcher (only with 2 or more
 organizations), user initials and name, Settings and Sign out.
 
