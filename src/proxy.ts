@@ -3,6 +3,10 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { decideProxyRoute, isProtectedPath } from "@/lib/auth/route-rules";
 import { parsePublicEnv } from "@/lib/env";
+import {
+  serverClientRequestOptions,
+  withAuthDeadline,
+} from "@/lib/supabase/request-timeout";
 import type { Database } from "@/types/database";
 
 /**
@@ -12,6 +16,8 @@ import type { Database } from "@/types/database";
  *    (httpOnly-capable cookies managed by @supabase/ssr; nothing in localStorage).
  * 2. Optimistic route protection with real HTTP redirects:
  *    signed-out → /login?next=…, signed-in on /login|/register → /auth/continue.
+ *    If Auth can't be reached in time, the visitor is treated as signed out
+ *    (see SUPABASE_AUTH_DEADLINE_MS).
  * 3. Private pages get `Cache-Control: no-store`, so after sign-out the
  *    browser can't show them from cache (back button).
  *
@@ -29,6 +35,7 @@ export async function proxy(request: NextRequest) {
       env.data.NEXT_PUBLIC_SUPABASE_URL,
       env.data.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
       {
+        ...serverClientRequestOptions(),
         cookies: {
           getAll() {
             return request.cookies.getAll();
@@ -51,8 +58,15 @@ export async function proxy(request: NextRequest) {
 
     // Validates the JWT (and refreshes it when expired). Don't run other
     // code between client creation and this call (see @supabase/ssr docs).
-    const { data } = await supabase.auth.getClaims();
-    isAuthenticated = typeof data?.claims?.sub === "string";
+    // Fails closed: an error, timeout or exceeded deadline (Auth down) means
+    // "not authenticated". That can't loop: signed-out visitors aren't
+    // redirected away from /login, and the session cookies are kept.
+    try {
+      const { data, error } = await withAuthDeadline(supabase.auth.getClaims());
+      isAuthenticated = !error && typeof data?.claims?.sub === "string";
+    } catch {
+      isAuthenticated = false;
+    }
   }
 
   const { pathname, search } = request.nextUrl;

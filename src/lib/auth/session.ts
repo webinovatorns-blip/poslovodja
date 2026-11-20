@@ -1,11 +1,13 @@
 import "server-only";
 
+import { isAuthRetryableFetchError, type User } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { connection } from "next/server";
 import { cache } from "react";
 
 import { routes } from "@/config/navigation";
+import { withAuthDeadline } from "@/lib/supabase/request-timeout";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import type { Database } from "@/types/database";
 
@@ -16,7 +18,11 @@ import {
   type ActiveOrganizationResolution,
   type OrganizationMembership,
 } from "./active-organization";
-import { MembershipsUnavailableError, isMembershipsUnavailableError } from "./errors";
+import {
+  AuthUnavailableError,
+  MembershipsUnavailableError,
+  isMembershipsUnavailableError,
+} from "./errors";
 import { decidePostAuthDestination } from "./route-rules";
 
 /**
@@ -24,7 +30,8 @@ import { decidePostAuthDestination } from "./route-rules";
  *
  * Every function re-checks on the server, per request:
  *   - the user comes from supabase.auth.getUser() (validated by Supabase Auth,
- *     not just decoded from the cookie);
+ *     not just decoded from the cookie); if Auth can't be reached in time,
+ *     AuthUnavailableError is thrown (fail closed, retryable);
  *   - memberships come from the database through RLS (only the caller's own
  *     ACTIVE memberships);
  *   - the active-organization cookie is only a preference.
@@ -46,7 +53,61 @@ export type OrganizationContext = {
   organizations: OrganizationMembership[];
 };
 
-export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
+export type AuthUserResult =
+  | { status: "signed-in"; user: User }
+  | { status: "signed-out" }
+  /** Auth didn't answer in time / network error / 5xx: session state unknown. */
+  | { status: "unavailable" };
+
+/**
+ * Runs a Supabase Auth call with the Auth deadline and tells "Auth couldn't
+ * be reached" (deadline exceeded, timeout, network error, 5xx from the
+ * gateway: AuthRetryableFetchError) apart from a real answer. A real answer
+ * may still carry an error (invalid code, expired session …).
+ */
+export async function callAuth<T extends { error: unknown }>(
+  call: Promise<T>,
+): Promise<{ unavailable: true } | { unavailable: false; result: T }> {
+  let result: T;
+  try {
+    result = await withAuthDeadline(call);
+  } catch {
+    // Deadline exceeded (already logged with a safe code).
+    return { unavailable: true };
+  }
+  if (result.error && isAuthRetryableFetchError(result.error)) {
+    // Safe log: HTTP status only (0 = timeout / network), never the message.
+    console.error("[auth] auth_unavailable", { status: result.error.status });
+    return { unavailable: true };
+  }
+  return { unavailable: false, result };
+}
+
+/**
+ * supabase.auth.getUser() with a deadline, classified. Callers must fail
+ * closed on "unavailable" (no access), but must not sign the user out
+ * because of it: the outage is temporary and the session may be valid.
+ */
+export async function getAuthUser(
+  supabase: SupabaseServerClient,
+): Promise<AuthUserResult> {
+  const call = await callAuth(supabase.auth.getUser());
+  if (call.unavailable) {
+    return { status: "unavailable" };
+  }
+  const { data, error } = call.result;
+  if (error || !data.user) {
+    return { status: "signed-out" };
+  }
+  return { status: "signed-in", user: data.user };
+}
+
+/**
+ * The Auth-validated user of this request, or null when signed out.
+ * Throws AuthUnavailableError (→ root error boundary with a retry) when Auth
+ * can't be reached: never treated as signed in.
+ */
+const getAuthenticatedUser = cache(async (): Promise<User | null> => {
   // Auth is always request-time: never part of a prerendered/prefetched shell.
   // (The Supabase client also reads the clock to check token expiry.)
   await connection();
@@ -59,21 +120,34 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
     return null;
   }
 
-  const { data, error } = await supabase.auth.getUser();
-  if (error || !data.user) {
-    return null;
+  const result = await getAuthUser(supabase);
+  if (result.status === "unavailable") {
+    throw new AuthUnavailableError();
   }
+  return result.status === "signed-in" ? result.user : null;
+});
 
+/** Display name from the profile; a failed read (incl. timeout) is not fatal. */
+const loadProfileName = cache(async (userId: string): Promise<string | null> => {
+  const supabase = await createSupabaseServerClient();
   const { data: profile } = await supabase
     .from("profiles")
     .select("full_name")
-    .eq("id", data.user.id)
+    .eq("id", userId)
     .maybeSingle();
+  return profile?.full_name ?? null;
+});
+
+export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
+  const user = await getAuthenticatedUser();
+  if (!user) {
+    return null;
+  }
 
   return {
-    id: data.user.id,
-    email: data.user.email ?? "",
-    fullName: profile?.full_name ?? null,
+    id: user.id,
+    email: user.email ?? "",
+    fullName: await loadProfileName(user.id),
   };
 });
 
@@ -97,8 +171,9 @@ export async function listActiveMemberships(
   if (error || !data) {
     // Safe log: a stable code and context only, never the message, user id,
     // tokens or cookies.
+    // A timeout / network failure has no PostgREST code (status 0).
     console.error("[auth] memberships_unavailable", {
-      code: typeof error?.code === "string" ? error.code : "no_data",
+      code: !error ? "no_data" : error.code ? error.code : "request_failed",
     });
     throw new MembershipsUnavailableError();
   }
@@ -141,8 +216,16 @@ export async function requireUser(): Promise<CurrentUser> {
 export async function getActiveOrganization(): Promise<
   ActiveOrganizationResolution & { user: CurrentUser }
 > {
-  const user = await requireUser();
-  const resolution = await resolveForUser(user.id);
+  const authUser = await getAuthenticatedUser();
+  if (!authUser) {
+    redirect(routes.login);
+  }
+  // Profile and memberships in parallel: when the Data API is down, the
+  // page fails after one request timeout instead of two.
+  const [user, resolution] = await Promise.all([
+    requireUser(),
+    resolveForUser(authUser.id),
+  ]);
   return { ...resolution, user };
 }
 

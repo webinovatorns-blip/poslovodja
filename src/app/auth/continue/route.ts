@@ -3,7 +3,7 @@ import type { NextRequest } from "next/server";
 
 import { routes } from "@/config/navigation";
 import { safeRedirectPath } from "@/lib/auth/redirects";
-import { resolvePostAuthPath } from "@/lib/auth/session";
+import { getAuthUser, resolvePostAuthPath } from "@/lib/auth/session";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 /**
@@ -22,8 +22,15 @@ export async function GET(request: NextRequest) {
     redirect(routes.login);
   }
 
-  const { data } = await supabase.auth.getUser();
-  if (!data.user) {
+  const auth = await getAuthUser(supabase);
+  if (auth.status === "unavailable") {
+    // Auth is down: keep the session (it may be valid) and go into the app.
+    // There the guard shows the retryable error, or, if the proxy can't
+    // verify the session either, /login is shown. Never back to /login from
+    // here with the cookie intact: the proxy would return the user here (loop).
+    redirect(next ? safeRedirectPath(next) : routes.dashboard);
+  }
+  if (auth.status === "signed-out") {
     // The cookie still holds a well-formed token, but Supabase Auth rejects it
     // (e.g. the user was deleted). Clear it, otherwise the proxy would keep
     // sending /login back here (redirect loop).
@@ -34,7 +41,7 @@ export async function GET(request: NextRequest) {
   redirect(
     await resolvePostAuthPath(
       supabase,
-      data.user.id,
+      auth.user.id,
       next ? safeRedirectPath(next) : null,
     ),
   );

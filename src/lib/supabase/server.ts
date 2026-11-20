@@ -6,11 +6,16 @@ import { cookies } from "next/headers";
 import { getPublicEnv } from "@/lib/env";
 import type { Database } from "@/types/database";
 
+import { serverClientRequestOptions } from "./request-timeout";
+
 /**
  * Supabase client for Server Components, Server Functions and Route Handlers.
  * Acts as the signed-in user (session from cookies) with the publishable key,
  * so RLS applies exactly as in the browser. Reading cookies makes the
  * surrounding render dynamic.
+ *
+ * Every request has a timeout (see ./request-timeout.ts): an unreachable
+ * upstream yields a normal `{ error }` instead of a hanging render.
  */
 export async function createSupabaseServerClient() {
   const env = getPublicEnv();
@@ -20,6 +25,7 @@ export async function createSupabaseServerClient() {
     env.NEXT_PUBLIC_SUPABASE_URL,
     env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
     {
+      ...serverClientRequestOptions(),
       cookies: {
         getAll() {
           return cookieStore.getAll();

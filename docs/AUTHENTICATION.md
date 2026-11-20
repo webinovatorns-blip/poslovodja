@@ -78,6 +78,8 @@ Pure decision logic lives in `src/lib/auth/route-rules.ts`
   pages send users without one to `/onboarding`.
 - `/reset-password` is never redirected away from, because it needs the
   recovery session.
+- When Supabase Auth is down, `/auth/continue` never sends back to `/login`
+  (see [Timeouts and outages](#timeouts-and-outages)).
 
 ## Safe redirects
 
@@ -131,10 +133,21 @@ appears only after a correct password, so it doesn't enable enumeration.
 - On success, the user is sent to `resolvePostAuthPath(next)`:
   - onboarding, picker or `next`;
   - recovery always goes to `/reset-password`.
-- On failure, the user goes to `/login?error=link_invalid` (or
-  `/forgot-password?error=reset_link_invalid`). Pages render only
-  **whitelisted** error keys (`publicErrorMessage`). Codes, tokens and
-  upstream error text are never logged or shown.
+- If Auth **answers** that the code or token is invalid, expired or already
+  used (or the PKCE verifier is missing), the user goes to
+  `/login?error=link_invalid` (or `/forgot-password?error=reset_link_invalid`).
+  Pages render only **whitelisted** error keys (`publicErrorMessage`). Codes,
+  tokens and upstream error text are never logged or shown.
+- If Auth **doesn't answer** (timeout, deadline, network error or a 5xx from
+  the gateway, i.e. `callAuth()` returns `unavailable`), the link may still be
+  valid. The route answers **in place** with a 503 page
+  (`src/lib/auth/callback-unavailable.ts`): "Prijava trenutno nije dostupna"
+  and "Pokušaj ponovo". The button is `href=""`, so it repeats the same
+  callback URL, and the code is never written into the page. The page sends
+  `Cache-Control: private, no-store` and `Referrer-Policy: no-referrer`.
+  auth-js deletes the PKCE verifier cookie after any failed exchange, so the
+  route restores the cookie it received (only in this case). Otherwise the
+  retry could only fail as "link invalid".
 
 ## Password reset
 
@@ -266,6 +279,65 @@ active.
 (`src/lib/auth/messages.ts`). Unknown errors become a generic message.
 Raw `error.message` is never shown or logged.
 
+## Timeouts and outages
+
+Without a timeout, a stopped PostgREST or Auth container behind Kong made a
+protected page hang for more than 30 s. All server-side Supabase clients
+(`createSupabaseServerClient`, the proxy client, the admin client) now share
+`serverClientRequestOptions()` from `src/lib/supabase/request-timeout.ts`:
+
+| Setting (optional env)        | Default | Applies to                                                                                                                         |
+| ----------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `SUPABASE_REQUEST_TIMEOUT_MS` | 6 s     | Every HTTP request (`global.fetch` wrapper; also aborts a stalled body). A caller-provided `signal` is merged in.                  |
+| `SUPABASE_AUTH_DEADLINE_MS`   | 7 s     | A whole `getUser()` / `getClaims()` call (`withAuthDeadline`). auth-js retries a failed token refresh with backoff for up to 30 s. |
+
+Both are optional server-side env variables (see `.env.example`). Leave them
+unset in normal use. They must be whole milliseconds between 1000 and 30000.
+Any other value (empty, `abc`, `1e3`, `0`, over 30 s …) falls back to the
+default and logs `[supabase] invalid_timeout_setting` with only the variable
+name. Keep the Auth deadline above the request timeout.
+
+The fetch wrapper removes its timer and its listener on the caller's signal
+exactly once: when the body has been read, is cancelled or errors, when the
+response has no body, when the fetch rejects, when the caller aborts, or
+when the timeout fires. `withAuthDeadline` clears its timer as soon as the
+call settles.
+
+postgrest-js GET retries are turned off (`db.retry: false`) so they can't
+multiply the timeout. The user retries from the error page instead.
+
+What the user sees (always fail closed, never extra access):
+
+| Situation                             | Result                                                                                                                                                                                |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Data API times out                    | `listActiveMemberships()` throws `MembershipsUnavailableError` → root error boundary, "Pokušaj ponovo". Profile and memberships load in parallel, so this takes one timeout, not two. |
+| Auth times out in the proxy           | `getClaims()` failure = signed out. A private page redirects to `/login?next=…`, and `/login` is served (no redirect away from it, so no loop). Cookies are kept.                     |
+| Auth times out in the DAL             | `getAuthUser()` returns `unavailable`, and guards throw `AuthUnavailableError` → root error boundary with "Trenutno ne možemo da proverimo vašu prijavu…".                            |
+| Auth times out in `/auth/continue`    | The session is **not** signed out. The route redirects to the safe `next` or `/dashboard`, never to `/login`, which would loop through the proxy.                                     |
+| Auth times out in `/auth/callback`    | 503 page in place, "Prijava trenutno nije dostupna" + "Pokušaj ponovo" (repeats the same link). PKCE verifier kept. Not "link nije važeći".                                           |
+| Auth times out in "Nova lozinka"      | The action returns the same retryable message, not "link nije važeći".                                                                                                                |
+| Other Auth actions (login, sign-up …) | The timeout is an `AuthRetryableFetchError` → the generic message.                                                                                                                    |
+
+"Unavailable" means a timeout, network error or 5xx from the gateway
+(`isAuthRetryableFetchError`). A real rejection (invalid or expired session)
+is still "signed out". Logs carry only safe codes: `[supabase] request_timeout`
+(with `service` and `timeoutMs`), `[supabase] auth_deadline_exceeded`,
+`[auth] auth_unavailable` (HTTP status only), and `[auth] memberships_unavailable`
+(`code: "request_failed"` for a timeout). They never include URLs, tokens,
+cookies, keys or user data.
+
+Manual check against the local stack:
+
+```bash
+docker stop supabase_rest_poslovodja   # PostgREST down: retryable error page within ~6 s
+docker start supabase_rest_poslovodja
+docker stop supabase_auth_poslovodja   # Auth down: /login or the retryable error within ~7 s
+docker start supabase_auth_poslovodja
+```
+
+The browser client (`src/lib/supabase/client.ts`) deliberately has no
+timeout. This is server-side work only, and these flows don't use it.
+
 ## Environment variables
 
 | Variable                               | Used for                                     |
@@ -274,6 +346,8 @@ Raw `error.message` is never shown or logged.
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | All Supabase clients, proxy                  |
 | `NEXT_PUBLIC_SITE_URL`                 | Links in auth emails (never the Host header) |
 | `SUPABASE_SECRET_KEY`                  | Admin client only (not used by these flows)  |
+| `SUPABASE_REQUEST_TIMEOUT_MS`          | Optional, server only: request timeout (6 s) |
+| `SUPABASE_AUTH_DEADLINE_MS`            | Optional, server only: Auth deadline (7 s)   |
 
 Without Supabase configuration, public pages still render. Private pages
 redirect to `/login`, which shows a "not available" message on submit. The

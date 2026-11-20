@@ -21,7 +21,7 @@ import { clearActiveOrganizationCookie } from "./cookies";
 import { authErrorMessage } from "./errors";
 import { authMessages } from "./messages";
 import { safeRedirectPath } from "./redirects";
-import { resolvePostAuthPath } from "./session";
+import { getAuthUser, resolvePostAuthPath } from "./session";
 
 /**
  * Auth server actions. Every action re-validates input with the same Zod
@@ -141,8 +141,11 @@ export async function updatePasswordAction(
   if (!supabase) return { ok: false, message: authMessages.configurationMissing };
 
   // The recovery link established a session in /auth/callback.
-  const { data: userData } = await supabase.auth.getUser();
-  if (!userData.user) {
+  const auth = await getAuthUser(supabase);
+  if (auth.status === "unavailable") {
+    return { ok: false, message: authMessages.authUnavailable };
+  }
+  if (auth.status === "signed-out") {
     return { ok: false, message: authMessages.resetLinkInvalid };
   }
 
@@ -154,7 +157,7 @@ export async function updatePasswordAction(
     return { ok: false, message: authErrorMessage(error) };
   }
 
-  redirect(await resolvePostAuthPath(supabase, userData.user.id, routes.dashboard));
+  redirect(await resolvePostAuthPath(supabase, auth.user.id, routes.dashboard));
 }
 
 export async function signOutAction(): Promise<void> {
