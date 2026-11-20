@@ -4,6 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("next/navigation", () => ({
   usePathname: () => "/jobs",
 }));
+// The header's sign-out form and organization switcher call server actions.
+vi.mock("@/lib/auth/actions", () => ({ signOutAction: vi.fn() }));
+vi.mock("@/lib/organizations/actions", () => ({ switchOrganizationAction: vi.fn() }));
 
 import { AppShell } from "@/components/layout/app-shell";
 import { DesktopSidebar } from "@/components/layout/desktop-sidebar";

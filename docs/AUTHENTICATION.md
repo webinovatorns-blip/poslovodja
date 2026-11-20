@@ -1,0 +1,296 @@
+# Authentication & organizations
+
+How users sign up, sign in, recover passwords, create their company and pick
+the active organization. For the database side, see [DATABASE.md](DATABASE.md).
+For the threat model and rules, see [SECURITY.md](SECURITY.md).
+
+## Overview
+
+```
+/register ──signUp──▶ email (confirm) ──▶ /auth/callback ──▶ /onboarding ──RPC──▶ /dashboard
+/login ─────signInWithPassword──────────────────────────────▶ /onboarding | /select-organization | /dashboard
+/forgot-password ──resetPasswordForEmail──▶ email ──▶ /auth/callback ──▶ /reset-password ──▶ /dashboard
+user menu "Odjava" ──signOut──▶ /login?signed_out=1
+```
+
+- **Supabase Auth** (email + password) through `@supabase/ssr`.
+- The session lives in **cookies** that `@supabase/ssr` manages. Tokens are
+  never stored in `localStorage` by app code.
+- All auth calls run in **Server Actions** (`src/lib/auth/actions.ts`) or
+  **Route Handlers** (`src/app/auth/*`). They use the server client, which
+  combines the publishable key with the user's cookies.
+- The admin client (secret key) is **not** used for any auth, onboarding or
+  organization flow, so RLS applies everywhere.
+
+## Routes
+
+| Route                                                                           | Access                           | Purpose                                                   |
+| ------------------------------------------------------------------------------- | -------------------------------- | --------------------------------------------------------- |
+| `/`                                                                             | public                           | Marketing                                                 |
+| `/login`                                                                        | public (signed-in → app)         | Sign in                                                   |
+| `/register`                                                                     | public (signed-in → app)         | Create an account                                         |
+| `/forgot-password`                                                              | public                           | Request a reset email                                     |
+| `/reset-password`                                                               | public; needs a recovery session | Set a new password                                        |
+| `/auth/callback`                                                                | public (Route Handler)           | Email confirmation, recovery, magic link, PKCE / OTP      |
+| `/auth/continue`                                                                | Route Handler                    | Sends a signed-in user to onboarding, picker or dashboard |
+| `/onboarding`                                                                   | signed in, no organization       | Company setup form                                        |
+| `/select-organization`                                                          | signed in, several organizations | Choose the active organization                            |
+| `/dashboard`, `/clients`, `/jobs`, `/quotes`, `/finances`, `/team`, `/settings` | signed in + active organization  | App                                                       |
+
+## Route protection (two layers)
+
+1. **`src/proxy.ts`**: Next.js 16 Proxy (the former `middleware.ts`) runs on
+   every page request.
+   - Refreshes the Supabase session with `getClaims()`, which validates the
+     JWT and writes rotated cookies.
+   - Signed out on a private route: a real **307** to
+     `/login?next=<path>`. The path goes through `safeRedirectPath`.
+   - Signed in on `/login` or `/register`: **307** to `/auth/continue`.
+   - Private routes and `/auth/*` get `Cache-Control: private, no-store`, so the
+     Back button can't show a cached private page after sign-out.
+2. **Server guards** (`src/lib/auth/session.ts`) are the authoritative check.
+   They run on every render, because the proxy is only an optimization.
+   - `requireUser()` calls `supabase.auth.getUser()`, which is verified by
+     Supabase Auth and not just decoded from the cookie.
+   - `getActiveOrganization()` resolves the active organization (see below).
+   - `requireOrganization()` redirects to `/onboarding` (no organization) or
+     `/select-organization` (several, none chosen).
+   - `requireOrganizationRole(roles)` does the same and also requires a role.
+     Users without the role go to `/dashboard`.
+
+   The `(app)` layout renders nothing until `requireOrganization()` succeeds.
+   The `(onboarding)` pages call `getActiveOrganization()`, which requires a user.
+
+   With Cache Components, the shell is sent before streamed content, so a
+   redirect raised during render is applied in the browser. The proxy
+   provides the HTTP-level redirect for signed-out users.
+
+3. **The database (RLS)** protects the data even if both layers are bypassed.
+
+Pure decision logic lives in `src/lib/auth/route-rules.ts`
+(`decideProxyRoute`, `decidePostAuthDestination`) and is unit-tested.
+
+**Redirect loops are avoided:**
+
+- `/auth/continue` signs out a session that Supabase rejects (for example, a
+  deleted user) before sending to `/login`.
+- `/onboarding` sends users who have an organization to `/dashboard`, and app
+  pages send users without one to `/onboarding`.
+- `/reset-password` is never redirected away from, because it needs the
+  recovery session.
+
+## Safe redirects
+
+`safeRedirectPath(value, fallback)` (`src/lib/auth/redirects.ts`) is used for
+every `next` parameter: login, callback, continue, the organization picker and
+the proxy.
+
+It accepts only same-origin relative paths. It rejects:
+
+- absolute and protocol-relative URLs (`https://…`, `//…`);
+- backslash tricks (`/\evil`);
+- other schemes (`javascript:`);
+- control characters;
+- `/auth/*` paths.
+
+Anything else falls back to `/dashboard`.
+
+## Registration
+
+1. `RegisterForm` validates with `registerSchema` (`src/lib/validations/auth.ts`):
+   - name is required;
+   - email must be valid;
+   - password is 10–72 characters (bcrypt limit);
+   - the confirmation must match;
+   - terms must be accepted.
+
+   `signUpAction` validates again with the **same schema**.
+
+2. `supabase.auth.signUp({ email, password, options })`:
+   - `options.data.full_name` is copied into `profiles` by the existing
+     `on_auth_user_created` trigger, which trims and clamps it;
+   - `options.emailRedirectTo` is `${NEXT_PUBLIC_SITE_URL}/auth/callback?next=/onboarding`.
+3. Email confirmation is **on**, so the user sees a "check your email" message.
+   The message is identical whether the address was new or already
+   registered, so it doesn't reveal which emails have accounts. If
+   confirmation is off and a session is returned, the user goes straight to
+   `/onboarding`.
+4. No organization is created at sign-up.
+
+Sign-in before confirming shows "E-mail adresa još nije potvrđena". This
+appears only after a correct password, so it doesn't enable enumeration.
+
+## Email confirmation and `/auth/callback`
+
+- `?code=…` (PKCE, the default email links) uses `exchangeCodeForSession(code)`.
+  The PKCE verifier cookie was set by `signUp` or `resetPasswordForEmail` in
+  the same browser.
+- `?token_hash=…&type=…` uses `verifyOtp`. This works across devices if the
+  email templates are changed to link to
+  `{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&type=email&next=/onboarding`.
+- On success, the user is sent to `resolvePostAuthPath(next)`:
+  - onboarding, picker or `next`;
+  - recovery always goes to `/reset-password`.
+- On failure, the user goes to `/login?error=link_invalid` (or
+  `/forgot-password?error=reset_link_invalid`). Pages render only
+  **whitelisted** error keys (`publicErrorMessage`). Codes, tokens and
+  upstream error text are never logged or shown.
+
+## Password reset
+
+1. `/forgot-password` calls `resetPasswordForEmail` with `redirectTo`
+   `/auth/callback?next=/reset-password`. The UI **always** shows: "Ako postoji
+   nalog sa ovom adresom, poslali smo uputstvo za promenu lozinke." This
+   holds even on errors or rate limits.
+2. The email link opens `/auth/callback`, which exchanges the code and creates
+   a recovery session. The user then lands on `/reset-password`.
+3. `/reset-password` checks for a session on the server.
+   - Without one, it shows "link not valid or expired" with a link to request
+     a new one.
+   - With one, `updatePasswordAction` validates with `resetPasswordSchema`
+     (the same rules as registration) and calls `updateUser({ password })`.
+     It then continues into the app (dashboard or onboarding).
+4. The app stores no reset tokens. Supabase Auth handles them.
+
+## Sign-out
+
+`signOutAction` makes these calls:
+
+- `supabase.auth.signOut({ scope: "local" })`, which revokes this device's
+  refresh token and clears the auth cookies;
+- it deletes the active-organization cookie;
+- it redirects to `/login?signed_out=1`.
+
+Business data is untouched. Private pages are `no-store`, and the server
+guard requires a user, so Back or a reload can't show them again.
+
+There is **no "Zapamti me"** option. `@supabase/ssr` keeps the session in
+persistent cookies refreshed by the proxy. A session-only mode would need
+custom cookie handling, which we chose not to add.
+
+## Onboarding
+
+`/onboarding` (`OnboardingForm`) collects:
+
+- company name, business type, country, currency, time zone, phone and email;
+- optionally PIB (9 digits), matični broj (8 digits), address, city and
+  postal code.
+
+The defaults are RS, RSD and Europe/Belgrade. The UI is Serbian (Latin).
+The business type keys match `private.is_valid_business_type()`.
+
+`createOrganizationAction` validates with `onboardingSchema` and calls the
+RPC **`create_organization_with_details`**
+(migration `20261121100000_onboarding_create_organization.sql`). It never uses
+a direct insert.
+
+- **Atomic:** the organization, the `owner` membership for `auth.uid()` and the
+  idempotency record are written in one transaction. A failure leaves nothing
+  behind, and no organization can exist without its owner.
+- **No owner parameter:** the caller can't name someone else as owner.
+- **Server-generated, unique slug:** the slug is built from the name with
+  Serbian Latin transliteration (`đ→dj`, `č/ć→c`, …). The plain form is
+  tried first, then a random 6-character suffix if it's taken. The unique
+  constraint decides.
+- **Idempotent:**
+  - The form creates one `idempotencyKey` (UUID) per form instance and
+    reuses it on retries.
+  - The RPC takes a per-user advisory lock and returns the existing
+    organization for a repeated key.
+  - Together with the disabled button and an in-flight guard
+    (`useActionSubmit`), a double click or a retry after a network error
+    creates **one** organization.
+- **Errors:** errors are mapped to a single retryable Serbian message. No
+  database details are shown.
+- **On success:** the new organization becomes the active one (cookie) and
+  the user goes to `/dashboard`.
+
+Why a new RPC? The existing `create_organization` takes a client-chosen slug,
+no company details, and isn't idempotent. It stays in place, unchanged.
+
+## Active organization
+
+| Rule                                            | Implementation                                                                                       |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| A cookie or URL id is only a preference         | `poslovodja_active_org` (httpOnly, SameSite=Lax, Secure in prod) holds an id, never a role or a name |
+| Verified on every use                           | `listActiveMemberships()` reads the caller's memberships through RLS on each request                 |
+| Unknown or foreign id is discarded              | `resolveActiveOrganization()` honors the cookie only if it matches an **active** membership          |
+| One organization: chosen automatically          | `state: "selected"`                                                                                  |
+| Several: picker                                 | `state: "needs-selection"` → `/select-organization`                                                  |
+| Suspended or invited memberships give no access | filtered in SQL **and** in code                                                                      |
+| Switching                                       | `switchOrganizationAction(id)` checks the id against active memberships before setting the cookie    |
+| No trusted client state                         | the client receives names and ids for display only; the server re-resolves everything                |
+
+Header: active organization name, a switcher (only with 2 or more
+organizations), user initials and name, Settings and Sign out.
+
+Use it in code:
+
+```ts
+import { requireOrganization, requireOrganizationRole } from "@/lib/auth/session";
+
+const { user, organization } = await requireOrganization();
+// organization.organizationId, organization.role ("owner" | "admin" | "manager" | "worker")
+
+await requireOrganizationRole(["owner", "admin"]); // e.g. for settings mutations
+```
+
+Queries for business data must still filter by `organization.organizationId`.
+RLS limits rows to the user's organizations, but it doesn't know which one is
+active.
+
+## Error messages
+
+`src/lib/auth/errors.ts` maps Supabase error **codes** to Serbian messages
+(`src/lib/auth/messages.ts`). Unknown errors become a generic message.
+Raw `error.message` is never shown or logged.
+
+## Environment variables
+
+| Variable                               | Used for                                     |
+| -------------------------------------- | -------------------------------------------- |
+| `NEXT_PUBLIC_SUPABASE_URL`             | All Supabase clients, proxy                  |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | All Supabase clients, proxy                  |
+| `NEXT_PUBLIC_SITE_URL`                 | Links in auth emails (never the Host header) |
+| `SUPABASE_SECRET_KEY`                  | Admin client only (not used by these flows)  |
+
+Without Supabase configuration, public pages still render. Private pages
+redirect to `/login`, which shows a "not available" message on submit. The
+server logs the missing variable **names** at start in development.
+
+## Supabase Auth settings
+
+Local settings live in `supabase/config.toml`. Mirror them in the hosted
+dashboard.
+
+| Setting                             | Value                                                 |
+| ----------------------------------- | ----------------------------------------------------- |
+| `site_url`                          | `http://localhost:3000` (production: the real domain) |
+| `additional_redirect_urls`          | `…/auth/callback` for every origin the app runs on    |
+| `minimum_password_length`           | `10` (= `PASSWORD_MIN_LENGTH`)                        |
+| `[auth.email] enable_confirmations` | `true`                                                |
+
+## Local testing
+
+```bash
+npm run db:start           # Supabase + Mailpit (emails: http://127.0.0.1:54324)
+npm run db:reset           # migrations + seed
+npm run dev                # with .env.local (see .env.example)
+```
+
+To test registration by hand, open http://localhost:3000/register. Read the
+confirmation email in Mailpit at http://127.0.0.1:54324, then click the link.
+
+Automated tests:
+
+```bash
+npm run test               # unit: schemas, redirects, route rules, actions, callback, forms
+npm run db:test            # pgTAP incl. 07_onboarding.test.sql
+npm run test:integration   # HTTP: concurrency/idempotency of onboarding, isolation
+npm run test:e2e           # Playwright: smoke + app shell + auth flows
+npm run test:e2e:auth      # only the full auth flows
+```
+
+The Playwright config reads the local stack from `supabase status`. It builds
+the app with those `NEXT_PUBLIC_*` values on port 3100. Auth and app-shell
+specs are **skipped** with a visible reason if Supabase isn't running.

@@ -6,13 +6,14 @@ new migration instead (`npx supabase migration new <name>`).
 
 ## Migrations (in order)
 
-| #   | File                                        | Contents                                                                                                                                                                                                              |
-| --- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | `20261120100000_extensions_and_enums.sql`   | `pgcrypto`, `private` schema, enums `member_role` and `membership_status`                                                                                                                                             |
-| 2   | `20261120100100_core_tables.sql`            | `profiles`, `organizations`, `memberships`, `organization_invitations` with check constraints. RLS is **enabled** and all privileges are **revoked** from API roles here.                                             |
-| 3   | `20261120100200_functions_and_triggers.sql` | `updated_at` triggers, sign-up trigger, RLS helpers, membership guard trigger, and the RPCs `create_organization`, `create_organization_invitation`, `accept_organization_invitation` and `list_organization_members` |
-| 4   | `20261120100300_rls_policies.sql`           | Column-level grants and RLS policies                                                                                                                                                                                  |
-| 5   | `20261120100400_indexes.sql`                | Indexes for RLS lookups, foreign keys and pending invitations                                                                                                                                                         |
+| #   | File                                                | Contents                                                                                                                                                                                                              |
+| --- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `20261120100000_extensions_and_enums.sql`           | `pgcrypto`, `private` schema, enums `member_role` and `membership_status`                                                                                                                                             |
+| 2   | `20261120100100_core_tables.sql`                    | `profiles`, `organizations`, `memberships`, `organization_invitations` with check constraints. RLS is **enabled** and all privileges are **revoked** from API roles here.                                             |
+| 3   | `20261120100200_functions_and_triggers.sql`         | `updated_at` triggers, sign-up trigger, RLS helpers, membership guard trigger, and the RPCs `create_organization`, `create_organization_invitation`, `accept_organization_invitation` and `list_organization_members` |
+| 4   | `20261120100300_rls_policies.sql`                   | Column-level grants and RLS policies                                                                                                                                                                                  |
+| 5   | `20261120100400_indexes.sql`                        | Indexes for RLS lookups, foreign keys and pending invitations                                                                                                                                                         |
+| 6   | `20261121100000_onboarding_create_organization.sql` | Onboarding RPC `create_organization_with_details` (atomic, idempotent, server-generated slug), `private.organization_creation_requests`, `private.slugify`, `private.is_valid_business_type`                          |
 
 Tests and test data are **not** migrations. Migrations also run on hosted
 projects, so test code there would reach production. They live in:
@@ -140,19 +141,21 @@ create table public.jobs (
 
 ## Functions
 
-| Function                                                                | Kind                                             | Called by                   |
-| ----------------------------------------------------------------------- | ------------------------------------------------ | --------------------------- |
-| `private.is_org_member(org)`                                            | definer, stable                                  | RLS policies                |
-| `private.has_org_role(org, roles[])`                                    | definer, stable                                  | RLS policies, RPCs          |
-| `private.is_org_owner(org)`                                             | invoker, stable                                  | RLS policies, RPCs          |
-| `private.role_rank(role)`                                               | invoker, immutable                               | guard trigger               |
-| `private.handle_new_user()`                                             | invoker, trigger                                 | `auth.users` insert         |
-| `private.guard_membership_change()`                                     | definer, trigger                                 | `memberships` update/delete |
-| `private.set_updated_at()`                                              | invoker, trigger                                 | updates                     |
-| `public.create_organization(name, slug, business_type?)`                | definer RPC → uuid                               | signed-in users             |
-| `public.create_organization_invitation(org, email, role?, expires_in?)` | definer RPC → (invitation_id, token, expires_at) | owner, admin                |
-| `public.accept_organization_invitation(token)`                          | definer RPC → uuid                               | signed-in invitee           |
-| `public.list_organization_members(org)`                                 | definer RPC → rows                               | owner, admin                |
+| Function                                                                | Kind                                             | Called by                    |
+| ----------------------------------------------------------------------- | ------------------------------------------------ | ---------------------------- |
+| `private.is_org_member(org)`                                            | definer, stable                                  | RLS policies                 |
+| `private.has_org_role(org, roles[])`                                    | definer, stable                                  | RLS policies, RPCs           |
+| `private.is_org_owner(org)`                                             | invoker, stable                                  | RLS policies, RPCs           |
+| `private.role_rank(role)`                                               | invoker, immutable                               | guard trigger                |
+| `private.handle_new_user()`                                             | invoker, trigger                                 | `auth.users` insert          |
+| `private.guard_membership_change()`                                     | definer, trigger                                 | `memberships` update/delete  |
+| `private.set_updated_at()`                                              | invoker, trigger                                 | updates                      |
+| `public.create_organization(name, slug, business_type?)`                | definer RPC → uuid                               | signed-in users              |
+| `public.create_organization_invitation(org, email, role?, expires_in?)` | definer RPC → (invitation_id, token, expires_at) | owner, admin                 |
+| `public.accept_organization_invitation(token)`                          | definer RPC → uuid                               | signed-in invitee            |
+| `public.list_organization_members(org)`                                 | definer RPC → rows                               | owner, admin                 |
+| `public.create_organization_with_details(key, name, business_type, …)`  | definer RPC → uuid                               | signed-in users (onboarding) |
+| `private.slugify(text)` / `private.is_valid_business_type(text)`        | invoker, immutable                               | onboarding RPC               |
 
 `private` is not exposed by the Data API. The reasons for each `security definer`
 are in [SECURITY.md](SECURITY.md).
@@ -204,6 +207,34 @@ const { data: organizationId, error } = await supabase.rpc("create_organization"
 One transaction creates the organization and an active `owner` membership for
 `auth.uid()`. There is no owner argument. Direct `INSERT` into organizations
 or memberships is not granted.
+
+### Onboarding (create organization with details)
+
+```ts
+const { data: organizationId } = await supabase.rpc("create_organization_with_details", {
+  p_idempotency_key: crypto.randomUUID(), // one per form; reuse on retry
+  p_name: "Klima Servis Marko",
+  p_business_type: "hvac_service", // hvac_service | electrical | plumbing | renovation | painting | tiling | carpentry | other
+  p_country_code: "RS",
+  p_currency: "RSD",
+  p_timezone: "Europe/Belgrade",
+  p_phone: "064 123 4567",
+  p_email: "info@klima.rs", // + optional tax id, address, …
+});
+```
+
+- The caller becomes the active `owner`. There is no owner argument.
+- The slug comes from the name (Serbian Latin aware), plus a random suffix if
+  the name is taken.
+- The same `(caller, key)` always returns the same organization. A per-user
+  advisory lock makes concurrent double submits safe. The mapping lives in
+  `private.organization_creation_requests`, which the API doesn't expose.
+- Errors: `invalid_idempotency_key`, `invalid_name`, `invalid_business_type`,
+  `invalid_country_code`, `invalid_currency`, `invalid_timezone` (22023);
+  `slug_unavailable` and `profile_missing` (P0001); `not_authenticated`
+  (42501).
+- It was added instead of changing `create_organization`, which still accepts
+  a client slug, no details and no idempotency key, and is left untouched.
 
 ### Inviting a member
 

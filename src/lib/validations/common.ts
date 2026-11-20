@@ -39,3 +39,19 @@ export const phoneField = z
     },
     { error: validationMessages.invalidPhone },
   );
+
+/**
+ * Optional text input: empty or whitespace-only input becomes `undefined`.
+ * Form inputs always submit strings, so "" must count as "not provided".
+ */
+export function optionalText(max = 200, pattern?: { regex: RegExp; message: string }) {
+  return z
+    .string()
+    .trim()
+    .max(max, { error: validationMessages.tooLong(max) })
+    .refine((value) => value === "" || !pattern || pattern.regex.test(value), {
+      error: pattern?.message ?? "",
+    })
+    .transform((value) => (value === "" ? undefined : value))
+    .optional();
+}

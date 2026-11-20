@@ -132,10 +132,60 @@ Guards against leaking the secret key:
   any `NEXT_PUBLIC_*` variable contains a secret key.
 - Configuration errors list variable **names** only, never values.
 
+## Authentication and sessions
+
+Full flows are in [AUTHENTICATION.md](AUTHENTICATION.md).
+
+- **Sessions:** `@supabase/ssr` keeps sessions in cookies. App code never
+  stores tokens in `localStorage`. The proxy refreshes tokens with
+  `getClaims()`. Server guards use `getUser()`, which is validated by
+  Supabase Auth.
+- **Defense in depth for routes:** the proxy (HTTP 307) runs first, then the
+  server guards on every render, then RLS. No protection relies on a
+  client-side `useEffect`.
+- **No open redirects:** every `next` value goes through
+  `safeRedirectPath()`, which accepts internal paths only and never
+  `/auth/*`. Email links are built from `NEXT_PUBLIC_SITE_URL`, never from the
+  request `Host` header.
+- **No account enumeration:**
+  - registration shows the same message for new and existing emails;
+  - forgot-password always shows the same neutral message;
+  - login says only "Pogrešan e-mail ili lozinka.";
+  - "email not confirmed" appears only after a correct password.
+- **No leaking errors:**
+  - Supabase and Postgres errors are mapped by **code** to fixed Serbian
+    messages;
+  - the callback redirects with whitelisted error keys only;
+  - auth codes, tokens and raw messages are never logged or rendered.
+- **Active organization:**
+  - The cookie (`poslovodja_active_org`; httpOnly, SameSite=Lax, Secure in
+    production) is only a **preference**.
+  - Each request re-checks it against the user's **active** memberships,
+    loaded through RLS.
+  - A foreign, suspended or malformed id is ignored. Roles and names never
+    come from the client.
+- **Onboarding:** the controlled RPC `create_organization_with_details` is
+  atomic and idempotent, makes the caller the owner and generates the slug on
+  the server. The idempotency table lives in the unexposed `private` schema.
+  No direct inserts are possible: grants deny them.
+- **Sign-out:**
+  - `signOut({ scope: "local" })` runs and the organization cookie is
+    cleared;
+  - private routes send `Cache-Control: private, no-store`, so Back doesn't
+    show cached private pages.
+- **CSRF:** Server Actions are POST-only and Next.js checks `Origin` against
+  `Host`. The session cookie is `SameSite=Lax`.
+- **Admin client:** no auth, onboarding or organization flow uses the secret
+  key.
+
 ## Verifying
 
-- `npm run db:test` runs about 130 pgTAP assertions, including the 12 required
-  scenarios (look for `[1]` to `[12]` in test names).
+- `npm run db:test` runs about 145 pgTAP assertions, including the 12 tenant
+  scenarios (look for `[1]` to `[12]` in test names) and the onboarding RPC
+  (`07_onboarding.test.sql`).
+- Unit tests (`tests/unit/auth-*.test.ts`, `route-rules`, `active-organization`)
+  cover the auth scenarios `[1]` to `[19]`. Playwright (`tests/e2e/auth-flow.spec.ts`)
+  covers the full flow against the local stack.
 - `npm run test:integration` sends raw HTTP and supabase-js requests to
   Auth and PostgREST, bypassing the app.
 - The tests catch weakened rules. Replacing the organizations SELECT policy
@@ -167,8 +217,18 @@ Guards against leaking the secret key:
 - **Last owner blocks account deletion.** This is intentional (no orphaned
   organizations), but account deletion UX must offer "transfer ownership" or
   "delete organization" first.
-- **Auth settings** (`supabase/config.toml` `[auth]`): minimum password length
-  is 6 and email confirmation is off locally. Harden both in the auth phase.
-  Invitations already require a confirmed email.
+- **Auth settings:** local config now requires email confirmation and
+  10-character passwords. **The hosted project must be configured the same
+  way** (dashboard → Authentication). It also needs SMTP, rate limits and
+  CAPTCHA before public launch.
+- **Same-device PKCE links:** the default confirmation and reset emails only
+  work in the browser that started the flow. For cross-device links, switch
+  the email templates to the `token_hash` form (supported by `/auth/callback`).
+- **No "Zapamti me":** sessions persist until sign-out or refresh-token
+  expiry. A shared-device mode would need custom cookie handling.
+- **Signed-in JWTs stay valid until they expire** (`jwt_expiry` = 1 h) after a
+  sign-out on _another_ device, because `getClaims()` verifies locally. The
+  server guards call `getUser()`, which checks with Supabase Auth.
 - **`membership_status = 'invited'`** is unused, reserved for a future flow.
-- **The tax ID (PIB) and registration number (MB)** formats are not validated yet.
+- **PIB and matični broj:** the app checks the digit count (9 and 8); the
+  database stores them as free text (no checksum validation yet).
