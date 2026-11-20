@@ -7,9 +7,25 @@ Guidance for AI coding agents working in this repository. Read
 
 ## Current phase
 
-**Phase 2: secure multi-tenant Supabase foundation** (done: schema, RLS,
-RPCs, tests). Do NOT build auth UI, onboarding flows or business modules
-(clients, jobs, quotes, finances) unless the user explicitly starts that phase.
+**Phase 3: authentication & organization onboarding** (done: sign-up,
+confirmation, login, password reset, sign-out, onboarding RPC, active
+organization). Do NOT build business modules (clients, jobs, quotes,
+finances, team management) unless the user explicitly starts that phase.
+
+## Auth rules
+
+Read `docs/AUTHENTICATION.md` before touching auth, routing or sessions.
+
+- Protect pages on the server: `requireUser` / `requireOrganization` /
+  `requireOrganizationRole` from `src/lib/auth/session.ts` (never only in the client).
+  New private route prefixes must be added to `src/lib/auth/route-rules.ts`.
+- Any `next`/redirect target goes through `safeRedirectPath()`.
+- The active organization id (cookie/URL) is a preference only; always use
+  the server-resolved `organization` and filter business queries by its id.
+- Show users only mapped messages (`src/lib/auth/messages.ts`); never raw
+  Supabase/Postgres errors. Never log tokens, codes or keys.
+- Test placeholders must be obviously fake (e.g. `PLACEHOLDER-TOKEN`), never
+  key-shaped strings (GitHub secret scanning).
 
 ## Database & security rules
 
@@ -55,8 +71,10 @@ using an unfamiliar API. Notable:
 - Supabase clients: `src/lib/supabase/{client,server,admin}.ts`; env via
   `getPublicEnv()` / `getServerEnv()` (server-only).
 - SQL: `supabase/migrations/`, pgTAP tests `supabase/tests/database/`, seed `supabase/seed.sql`.
+- Auth/tenancy: `src/lib/auth/` (actions, session DAL, route rules), `src/proxy.ts`,
+  `src/app/auth/{callback,continue}/route.ts`.
 - Tests: `tests/unit/` (Vitest), `tests/integration/` (Vitest + local Supabase),
-  `tests/e2e/*.spec.ts` (Playwright).
+  `tests/e2e/*.spec.ts` (Playwright; auth specs need `npm run db:start`).
 
 ## Design rules
 

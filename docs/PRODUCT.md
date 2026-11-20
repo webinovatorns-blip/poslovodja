@@ -61,7 +61,8 @@ payments, so the owner sees the real margin of each job — not just revenue.
 1. **Technical foundation** — project setup, layout, empty pages, shared
    components, tests. _(done)_
 2. **Multi-tenant database foundation** — organizations, memberships, roles,
-   invitations, RLS, RPCs, database tests. _(current phase, done)_
-3. **Authentication & onboarding UI** — sign-up/login, organization creation
-   flow, invitations UI, route protection.
+   invitations, RLS, RPCs, database tests. _(done)_
+3. **Authentication & onboarding** — sign-up with email confirmation, login,
+   password reset, sign-out, company onboarding, active-organization picker,
+   route protection. _(current phase, done; invitations UI still open)_
 4. **Business modules** — clients → jobs → quotes → finances → team.

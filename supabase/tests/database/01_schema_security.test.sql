@@ -79,6 +79,7 @@ select set_eq(
     'private.has_org_role(uuid,member_role[])',
     'private.guard_membership_change()',
     'create_organization(text,text,text)',
+    'create_organization_with_details(uuid,text,text,text,text,text,text,text,text,text,text,text,text)',
     'create_organization_invitation(uuid,text,member_role,interval)',
     'accept_organization_invitation(text)',
     'list_organization_members(uuid)'
@@ -93,6 +94,13 @@ select ok(
 
 -- The private schema is not exposed to anon.
 select ok(not has_schema_privilege('anon', 'private', 'USAGE'), 'anon has no usage on schema private');
+
+-- Tables in `private` are never readable by API roles.
+select ok(
+  not has_table_privilege('authenticated', 'private.organization_creation_requests', 'SELECT')
+  and not has_table_privilege('authenticated', 'private.organization_creation_requests', 'INSERT'),
+  'authenticated cannot access private.organization_creation_requests'
+);
 
 -- Anonymous API requests see nothing and can't call RPCs (requirement 12).
 select tests.authenticate_as_anon();

@@ -50,3 +50,38 @@ export function getPublicEnv(): PublicEnv {
   }
   return result.data;
 }
+
+const siteUrlSchema = z.url({
+  protocol: /^https?$/,
+  error: "must be the public http(s) URL of the app, e.g. http://localhost:3000",
+});
+
+/**
+ * Public base URL of the app, used to build auth email links
+ * (confirmation, password reset). Taken from configuration, never from the
+ * request's Host header, so a forged Host can't redirect email links.
+ */
+export function parseSiteUrl() {
+  const result = siteUrlSchema.safeParse(process.env.NEXT_PUBLIC_SITE_URL || undefined);
+  return result.success
+    ? ({ success: true, data: result.data.replace(/\/+$/, "") } as const)
+    : ({
+        success: false,
+        problems: [
+          {
+            variable: "NEXT_PUBLIC_SITE_URL",
+            reason: process.env.NEXT_PUBLIC_SITE_URL
+              ? "must be an http(s) URL"
+              : "is missing",
+          },
+        ],
+      } as const);
+}
+
+export function getSiteUrl(): string {
+  const result = parseSiteUrl();
+  if (!result.success) {
+    throw new EnvValidationError("public", [...result.problems]);
+  }
+  return result.data;
+}

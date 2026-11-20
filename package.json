@@ -20,7 +20,8 @@
     "db:reset": "supabase db reset",
     "db:test": "supabase test db",
     "db:lint": "supabase db lint --level warning",
-    "db:types": "supabase gen types typescript --local --schema public > src/types/database.ts && prettier --write src/types/database.ts"
+    "db:types": "supabase gen types typescript --local --schema public > src/types/database.ts && prettier --write src/types/database.ts",
+    "test:e2e:auth": "playwright test --project auth-flow --trace off"
   },
   "dependencies": {
     "@hookform/resolvers": "^7.0.7",

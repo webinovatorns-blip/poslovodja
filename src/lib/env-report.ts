@@ -1,6 +1,6 @@
 import "server-only";
 
-import { parsePublicEnv } from "@/lib/env";
+import { parsePublicEnv, parseSiteUrl } from "@/lib/env";
 import { findLeakedPublicSecrets, parseServerEnv } from "@/lib/env.server";
 
 /**
@@ -19,8 +19,8 @@ export function reportEnvProblems(logger: Pick<Console, "warn"> = console) {
 
   if (process.env.NODE_ENV !== "development") return;
 
-  const problems = [parsePublicEnv(), parseServerEnv()].flatMap((result) =>
-    result.success ? [] : result.problems,
+  const problems = [parsePublicEnv(), parseSiteUrl(), parseServerEnv()].flatMap(
+    (result) => (result.success ? [] : result.problems),
   );
   if (problems.length === 0) return;
 

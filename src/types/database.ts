@@ -217,6 +217,24 @@ export type Database = {
           token: string;
         }[];
       };
+      create_organization_with_details: {
+        Args: {
+          p_address?: string;
+          p_business_type: string;
+          p_city?: string;
+          p_country_code?: string;
+          p_currency?: string;
+          p_email?: string;
+          p_idempotency_key: string;
+          p_name: string;
+          p_phone?: string;
+          p_postal_code?: string;
+          p_registration_number?: string;
+          p_tax_id?: string;
+          p_timezone?: string;
+        };
+        Returns: string;
+      };
       list_organization_members: {
         Args: { p_organization_id: string };
         Returns: {

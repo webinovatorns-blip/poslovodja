@@ -21,24 +21,36 @@
 src/
   app/                     Routes (App Router)
     (marketing)/page.tsx   "/" landing page
-    (auth)/                login, register, onboarding — centered card layout
-    (app)/                 authenticated area — AppShell layout
+    (auth)/                login, register, forgot-password, reset-password (public, card layout)
+    (onboarding)/          onboarding, select-organization (signed in, no active org)
+    (app)/                 authenticated area: guarded AppShell layout (requireOrganization)
       dashboard|clients|jobs|quotes|finances|team|settings/page.tsx
       loading.tsx          LoadingState for the app area
       error.tsx            ErrorState with retry for the app area
+    auth/callback/route.ts Supabase email/PKCE callback (Route Handler)
+    auth/continue/route.ts Post-login routing for signed-in users (Route Handler)
     layout.tsx             Root layout: <html lang="sr-Latn">, Inter font, metadata
     not-found.tsx          404 page
     globals.css            Tailwind import + design tokens
   components/
     ui/                    shadcn/ui primitives (owned code, edit freely)
-    layout/                AppShell, DesktopSidebar, MobileBottomNavigation, TopBar, UserMenu, Logo
+    auth/                  Auth forms (login, register, forgot/reset password), FormAlert
+    onboarding/            OnboardingForm, OrganizationPicker
+    layout/                AppShell, DesktopSidebar, MobileBottomNavigation, TopBar,
+                           UserMenu (sign-out), OrganizationSwitcher, Logo
     shared/                PageHeader, EmptyState, LoadingState, ErrorState, ConfirmDialog
   config/
     navigation.ts          Route map + navigation items (single source of truth)
-    site.ts                App name, description, placeholder session
+    site.ts                App name, description
+    roles.ts               Serbian labels for member roles
+  hooks/use-action-submit.ts  One-at-a-time server-action submit for forms
   instrumentation.ts       Server start: env report (names only), secret-leak guard
+  proxy.ts                 Next.js 16 Proxy: session refresh, HTTP auth redirects, no-store
   lib/
-    env.ts                 Zod-validated public env (lazy, browser-safe)
+    auth/                  Auth & tenancy: actions (server), session (DAL guards),
+                           route-rules, redirects, active-organization, errors, messages
+    organizations/actions.ts  Onboarding RPC call, organization switching
+    env.ts                 Zod-validated public env + NEXT_PUBLIC_SITE_URL (lazy, browser-safe)
     env.server.ts          Zod-validated server secrets (server-only)
     env-shared.ts          Key classification + EnvValidationError (no values in messages)
     env-report.ts          Startup configuration report (server-only)
@@ -64,15 +76,19 @@ docs/                      Product, architecture, database and security docs
 ## Routing
 
 - Route groups separate layouts without affecting URLs:
-  `(marketing)`, `(auth)`, `(app)`.
+  `(marketing)`, `(auth)`, `(onboarding)`, `(app)`. Auth routes and protection
+  are described in [AUTHENTICATION.md](AUTHENTICATION.md).
 - URL segments are English (`/jobs`, `/clients`) to match code; all visible
   labels are Serbian. Paths live in `routes` in `src/config/navigation.ts` —
   never hard-code them in components.
-- All pages are currently static (`○` in `next build`).
+- Pages build as static shells (`○`); everything that reads the session
+  streams in at request time behind `<Suspense>` (Cache Components), and the
+  DAL calls `connection()` so auth is never prerendered or cached.
 
 ## App shell & responsive layout
 
-- **Phone (< `md`, 768px):** sticky top bar (company name + user menu), content,
+- **Phone (< `md`, 768px):** sticky top bar (active organization / switcher +
+  user menu with Settings and Sign out), content,
   fixed bottom navigation with 4 primary sections + "Više" menu
   (Finansije, Ekipa, Podešavanja). A page's `primaryAction` (via `PageHeader`)
   is pinned just above the bottom nav for thumb reach. `main` reserves bottom
@@ -152,10 +168,29 @@ The full details are in [DATABASE.md](DATABASE.md) and [SECURITY.md](SECURITY.md
 - **Invitation tokens:** select explicit columns on `organization_invitations`.
   `select('*')` fails because `token_hash` is not readable.
 
+## Authentication and active organization
+
+See [AUTHENTICATION.md](AUTHENTICATION.md) for the full flows.
+
+- **Proxy (`src/proxy.ts`):** refreshes the Supabase session cookies and
+  returns HTTP 307s for signed-out users. It is optimistic only.
+- **DAL (`src/lib/auth/session.ts`):** `getCurrentUser`, `requireUser`,
+  `getActiveOrganization`, `requireOrganization` and `requireOrganizationRole`
+  are the authoritative checks. They run per request (`connection()`) and are
+  deduplicated with React `cache()`.
+- **Mutations** are Server Actions (`src/lib/auth/actions.ts`,
+  `src/lib/organizations/actions.ts`). They re-validate input with the shared
+  Zod schema and return `ActionResult` (`{ ok, message?, fieldErrors? }`), or
+  redirect.
+- **Active organization:** an httpOnly cookie holds the preferred id. It is
+  re-validated against the user's active memberships on every request.
+
 ## Forms & validation
 
 Use React Hook Form with `zodResolver` and the shadcn `Form*` primitives from
-`components/ui/form.tsx`. Compose domain schemas from `lib/validations/common.ts`
+`components/ui/form.tsx`. Submit to a Server Action through `useActionSubmit`
+(loading state, double-submit guard, server field errors). The server action
+validates again with the **same** schema (`src/lib/validations/{auth,onboarding}.ts`). Compose domain schemas from `lib/validations/common.ts`
 (`requiredText`, `emailField`, `phoneField`); user-facing messages live in
 `lib/validations/messages.ts` (Serbian).
 
