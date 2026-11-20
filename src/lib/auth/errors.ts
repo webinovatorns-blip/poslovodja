@@ -32,6 +32,34 @@ export function isMembershipsUnavailableError(error: unknown): boolean {
   );
 }
 
+/** Stable digest of AuthUnavailableError (see MEMBERSHIPS_UNAVAILABLE_DIGEST). */
+export const AUTH_UNAVAILABLE_DIGEST = "AUTH_UNAVAILABLE";
+
+/**
+ * Supabase Auth could not be reached in time (timeout, network error or a
+ * 5xx from the gateway), so we don't know whether the session is valid.
+ * Fails closed: no access is granted, but the user isn't signed out either;
+ * the root error boundary offers a retry. Carries no upstream detail.
+ */
+export class AuthUnavailableError extends Error {
+  readonly digest = AUTH_UNAVAILABLE_DIGEST;
+
+  constructor() {
+    super("auth_unavailable");
+    this.name = "AuthUnavailableError";
+  }
+}
+
+export function isAuthUnavailableError(error: unknown): boolean {
+  return (
+    error instanceof AuthUnavailableError ||
+    (typeof error === "object" &&
+      error !== null &&
+      "digest" in error &&
+      (error as { digest?: unknown }).digest === AUTH_UNAVAILABLE_DIGEST)
+  );
+}
+
 /** Minimal shape of Supabase Auth / PostgREST errors we inspect. */
 type ErrorLike =
   { code?: unknown; status?: unknown; message?: unknown } | null | undefined;

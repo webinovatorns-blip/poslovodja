@@ -192,6 +192,23 @@ Full flows are in [AUTHENTICATION.md](AUTHENTICATION.md).
   with `using (true)` and dropping the guard trigger made 17 assertions fail
   (checked once during development).
 
+## Upstream timeouts (fail closed)
+
+Every server-side Supabase request has a timeout (6 s per request, 7 s for a
+whole Auth call, see AUTHENTICATION.md → "Timeouts and outages"). An
+unreachable Auth or Data API can't hold server resources indefinitely or
+freeze a page. A timeout becomes a normal Supabase error and is handled
+fail-closed:
+
+- Auth unknown never means signed in. The proxy treats it as signed out, and
+  the server guards throw `AuthUnavailableError` (retryable error page).
+- Auth unknown never signs the user out either, so a short outage doesn't
+  log everyone out, and it doesn't cause a `/login` ⇄ `/auth/continue` loop.
+- Data API errors never mean "no organizations" (no onboarding redirect).
+- Logs contain only stable codes (`[supabase] request_timeout`,
+  `[supabase] auth_deadline_exceeded`), never URLs, tokens, cookies or keys.
+- New server-side clients must spread `serverClientRequestOptions()`.
+
 ## Rules for new tables
 
 1. Add `organization_id uuid not null references organizations on delete cascade`.

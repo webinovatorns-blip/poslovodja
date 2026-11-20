@@ -78,6 +78,8 @@ Pure decision logic lives in `src/lib/auth/route-rules.ts`
   pages send users without one to `/onboarding`.
 - `/reset-password` is never redirected away from, because it needs the
   recovery session.
+- When Supabase Auth is down, `/auth/continue` never sends back to `/login`
+  (see [Timeouts and outages](#timeouts-and-outages)).
 
 ## Safe redirects
 
@@ -265,6 +267,52 @@ active.
 `src/lib/auth/errors.ts` maps Supabase error **codes** to Serbian messages
 (`src/lib/auth/messages.ts`). Unknown errors become a generic message.
 Raw `error.message` is never shown or logged.
+
+## Timeouts and outages
+
+Without a timeout, a stopped PostgREST or Auth container behind Kong made a
+protected page hang for more than 30 s. All server-side Supabase clients
+(`createSupabaseServerClient`, the proxy client, the admin client) now share
+`serverClientRequestOptions()` from `src/lib/supabase/request-timeout.ts`:
+
+| Constant                      | Value | Applies to                                                                                                                         |
+| ----------------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `SUPABASE_REQUEST_TIMEOUT_MS` | 6 s   | Every HTTP request (`global.fetch` wrapper; also aborts a stalled body). A caller-provided `signal` is merged in.                  |
+| `SUPABASE_AUTH_DEADLINE_MS`   | 7 s   | A whole `getUser()` / `getClaims()` call (`withAuthDeadline`). auth-js retries a failed token refresh with backoff for up to 30 s. |
+
+postgrest-js GET retries are turned off (`db.retry: false`) so they can't
+multiply the timeout. The user retries from the error page instead.
+
+What the user sees (always fail closed, never extra access):
+
+| Situation                             | Result                                                                                                                                                                                |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Data API times out                    | `listActiveMemberships()` throws `MembershipsUnavailableError` → root error boundary, "Pokušaj ponovo". Profile and memberships load in parallel, so this takes one timeout, not two. |
+| Auth times out in the proxy           | `getClaims()` failure = signed out. A private page redirects to `/login?next=…`, and `/login` is served (no redirect away from it, so no loop). Cookies are kept.                     |
+| Auth times out in the DAL             | `getAuthUser()` returns `unavailable`, and guards throw `AuthUnavailableError` → root error boundary with "Trenutno ne možemo da proverimo vašu prijavu…".                            |
+| Auth times out in `/auth/continue`    | The session is **not** signed out. The route redirects to the safe `next` or `/dashboard`, never to `/login`, which would loop through the proxy.                                     |
+| Auth times out in "Nova lozinka"      | The action returns the same retryable message, not "link nije važeći".                                                                                                                |
+| Other Auth actions (login, sign-up …) | The timeout is an `AuthRetryableFetchError` → the generic message.                                                                                                                    |
+
+"Unavailable" means a timeout, network error or 5xx from the gateway
+(`isAuthRetryableFetchError`). A real rejection (invalid or expired session)
+is still "signed out". Logs carry only safe codes: `[supabase] request_timeout`
+(with `service` and `timeoutMs`), `[supabase] auth_deadline_exceeded`,
+`[auth] auth_unavailable` (HTTP status only), and `[auth] memberships_unavailable`
+(`code: "request_failed"` for a timeout). They never include URLs, tokens,
+cookies, keys or user data.
+
+Manual check against the local stack:
+
+```bash
+docker stop supabase_rest_poslovodja   # PostgREST down: retryable error page within ~6 s
+docker start supabase_rest_poslovodja
+docker stop supabase_auth_poslovodja   # Auth down: /login or the retryable error within ~7 s
+docker start supabase_auth_poslovodja
+```
+
+The browser client (`src/lib/supabase/client.ts`) has no timeout yet. It
+isn't used by these flows.
 
 ## Environment variables
 

@@ -6,6 +6,8 @@ import { getPublicEnv } from "@/lib/env";
 import { getServerEnv } from "@/lib/env.server";
 import type { Database } from "@/types/database";
 
+import { serverClientRequestOptions } from "./request-timeout";
+
 /**
  * Supabase client with the SECRET (service_role) key. It BYPASSES RLS.
  *
@@ -21,6 +23,8 @@ export function createSupabaseAdminClient() {
   const { SUPABASE_SECRET_KEY } = getServerEnv();
 
   return createClient<Database>(NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SECRET_KEY, {
+    // Same request timeout as the user-scoped server client.
+    ...serverClientRequestOptions(),
     auth: {
       persistSession: false,
       autoRefreshToken: false,
