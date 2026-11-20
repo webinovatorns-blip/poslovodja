@@ -87,7 +87,9 @@ describe("OnboardingForm", () => {
 
     await user.click(screen.getByRole("button", { name: "Sačuvaj i nastavi" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("pokušajte ponovo");
-    await user.click(screen.getByRole("button", { name: "Sačuvaj i nastavi" }));
+    // The error can render a moment before the pending transition ends
+    // (button label "Čuvamo firmu…"); wait for the button to be ready again.
+    await user.click(await screen.findByRole("button", { name: "Sačuvaj i nastavi" }));
 
     await waitFor(() =>
       expect(actions.createOrganizationAction).toHaveBeenCalledTimes(2),
