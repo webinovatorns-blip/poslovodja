@@ -16,6 +16,7 @@ import {
   type ActiveOrganizationResolution,
   type OrganizationMembership,
 } from "./active-organization";
+import { MembershipsUnavailableError, isMembershipsUnavailableError } from "./errors";
 import { decidePostAuthDestination } from "./route-rules";
 
 /**
@@ -76,7 +77,13 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
   };
 });
 
-/** Active memberships of `userId`, loaded through RLS. */
+/**
+ * Active memberships of `userId`, loaded through RLS.
+ *
+ * Returns `[]` ONLY when the query succeeded and found nothing. A failed
+ * query throws MembershipsUnavailableError: callers must not mistake an
+ * outage for "no organizations" (that would send the user to onboarding).
+ */
 export async function listActiveMemberships(
   supabase: SupabaseServerClient,
   userId: string,
@@ -88,7 +95,12 @@ export async function listActiveMemberships(
     .eq("status", "active");
 
   if (error || !data) {
-    return [];
+    // Safe log: a stable code and context only, never the message, user id,
+    // tokens or cookies.
+    console.error("[auth] memberships_unavailable", {
+      code: typeof error?.code === "string" ? error.code : "no_data",
+    });
+    throw new MembershipsUnavailableError();
   }
 
   return (
@@ -137,6 +149,8 @@ export async function getActiveOrganization(): Promise<
 /**
  * The verified active organization, or a redirect:
  * no organization → /onboarding; several and none chosen → /select-organization.
+ * If memberships can't be read, MembershipsUnavailableError propagates to the
+ * root error boundary (src/app/error.tsx), which offers a retry.
  */
 export async function requireOrganization(): Promise<OrganizationContext> {
   const resolution = await getActiveOrganization();
@@ -176,10 +190,17 @@ export async function resolvePostAuthPath(
   userId: string,
   next?: string | null,
 ): Promise<string> {
-  const memberships = await listActiveMemberships(supabase, userId);
-  const resolution = resolveActiveOrganization(
-    memberships,
-    await readPreferredOrganizationId(),
-  );
-  return decidePostAuthDestination(resolution.state, next);
+  try {
+    const memberships = await listActiveMemberships(supabase, userId);
+    const resolution = resolveActiveOrganization(
+      memberships,
+      await readPreferredOrganizationId(),
+    );
+    return decidePostAuthDestination(resolution.state, next);
+  } catch (error) {
+    if (isMembershipsUnavailableError(error)) {
+      return decidePostAuthDestination("unavailable", next);
+    }
+    throw error;
+  }
 }

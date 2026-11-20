@@ -1,5 +1,37 @@
 import { authMessages } from "./messages";
 
+/**
+ * Stable digest of MembershipsUnavailableError. Next.js keeps a digest that
+ * is already set on a thrown error, so error boundaries can recognize this
+ * error in production too (where server error messages are stripped).
+ */
+export const MEMBERSHIPS_UNAVAILABLE_DIGEST = "MEMBERSHIPS_UNAVAILABLE";
+
+/**
+ * Reading the user's memberships failed (database / Data API error).
+ * Different from "the user has no memberships": callers must never treat it
+ * as that, i.e. never send the user to onboarding because of it.
+ * Carries no upstream message, SQL detail or identifiers.
+ */
+export class MembershipsUnavailableError extends Error {
+  readonly digest = MEMBERSHIPS_UNAVAILABLE_DIGEST;
+
+  constructor() {
+    super("memberships_unavailable");
+    this.name = "MembershipsUnavailableError";
+  }
+}
+
+export function isMembershipsUnavailableError(error: unknown): boolean {
+  return (
+    error instanceof MembershipsUnavailableError ||
+    (typeof error === "object" &&
+      error !== null &&
+      "digest" in error &&
+      (error as { digest?: unknown }).digest === MEMBERSHIPS_UNAVAILABLE_DIGEST)
+  );
+}
+
 /** Minimal shape of Supabase Auth / PostgREST errors we inspect. */
 type ErrorLike =
   { code?: unknown; status?: unknown; message?: unknown } | null | undefined;

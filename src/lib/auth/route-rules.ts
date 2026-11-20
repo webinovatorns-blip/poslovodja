@@ -68,12 +68,15 @@ export function decideProxyRoute(input: {
 
 export type OrganizationState = "none" | "needs-selection" | "selected";
 
+/** Post-auth routing also knows "memberships could not be read". */
+export type PostAuthState = OrganizationState | "unavailable";
+
 /**
  * Where a signed-in user goes after login, email confirmation, password
  * reset or when visiting /login while signed in.
  */
 export function decidePostAuthDestination(
-  state: OrganizationState,
+  state: PostAuthState,
   next?: string | null,
 ): string {
   if (state === "none") {
@@ -85,6 +88,13 @@ export function decidePostAuthDestination(
   const isOrgSetupPage =
     targetPath === routes.onboarding || targetPath === routes.selectOrganization;
   const isGuestPage = isGuestOnlyPath(targetPath);
+
+  if (state === "unavailable") {
+    // Unknown organization state: never onboarding (it could create a
+    // duplicate organization). The app area re-reads memberships and shows a
+    // retryable error while the database is unavailable.
+    return isOrgSetupPage || isGuestPage ? routes.dashboard : target;
+  }
 
   if (state === "needs-selection") {
     const after = isOrgSetupPage || isGuestPage ? routes.dashboard : target;
