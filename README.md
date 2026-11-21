@@ -150,6 +150,7 @@ than `.env.example` are git-ignored.
 | `NEXT_PUBLIC_SUPABASE_URL`             | yes                | Supabase API URL                                                   |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | yes                | Publishable (or legacy anon) key; RLS applies                      |
 | `NEXT_PUBLIC_SITE_URL`                 | yes                | Public app URL for auth email links (e.g. `http://localhost:3000`) |
+| `NEXT_PUBLIC_BASE_PATH`                | yes                | Optional build-time mount path (production: `/poslovodja`)         |
 | `SUPABASE_SECRET_KEY`                  | **no**             | Secret (or legacy service_role) key; bypasses RLS; server only     |
 
 In development the server logs which variables are missing (names only).
