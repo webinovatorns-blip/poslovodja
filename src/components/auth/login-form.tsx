@@ -3,10 +3,12 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useForm } from "react-hook-form";
+import { useCallback } from "react";
+import { useForm, useWatch } from "react-hook-form";
 
 import { FormAlert } from "@/components/auth/form-alert";
 import { SubmitButton } from "@/components/auth/submit-button";
+import { TurnstileCaptcha } from "@/components/auth/turnstile-captcha";
 import {
   Form,
   FormControl,
@@ -17,6 +19,7 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { routes } from "@/config/navigation";
+import { getTurnstileSiteKey } from "@/config/captcha";
 import { useActionSubmit } from "@/hooks/use-action-submit";
 import { signInAction } from "@/lib/auth/actions";
 import { authMessages, publicErrorMessage } from "@/lib/auth/messages";
@@ -29,6 +32,7 @@ import { loginSchema, type LoginInput } from "@/lib/validations/auth";
  * would need custom cookie handling. "Odjava" ends the session on this device.
  */
 export function LoginForm() {
+  const turnstileSiteKey = getTurnstileSiteKey();
   const searchParams = useSearchParams();
   // Only internal paths survive; anything else falls back to the default.
   const nextParam = searchParams.get("next");
@@ -39,9 +43,14 @@ export function LoginForm() {
   const form = useForm<LoginInput>({
     resolver: zodResolver(loginSchema),
     mode: "onTouched",
-    defaultValues: { email: "", password: "", next },
+    defaultValues: { email: "", password: "", next, captchaToken: undefined },
   });
   const { submit, isPending, result } = useActionSubmit(form, signInAction);
+  const captchaToken = useWatch({ control: form.control, name: "captchaToken" });
+  const setCaptchaToken = useCallback(
+    (token: string | undefined) => form.setValue("captchaToken", token),
+    [form],
+  );
 
   return (
     <Form {...form}>
@@ -97,7 +106,19 @@ export function LoginForm() {
           )}
         />
 
-        <SubmitButton pending={isPending} pendingLabel="Prijavljivanje…">
+        {turnstileSiteKey ? (
+          <TurnstileCaptcha
+            siteKey={turnstileSiteKey}
+            onTokenChange={setCaptchaToken}
+            resetKey={result}
+          />
+        ) : null}
+
+        <SubmitButton
+          pending={isPending}
+          disabled={Boolean(turnstileSiteKey && !captchaToken)}
+          pendingLabel="Prijavljivanje…"
+        >
           Prijavi se
         </SubmitButton>
 

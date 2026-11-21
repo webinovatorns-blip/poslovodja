@@ -177,6 +177,10 @@ Full flows are in [AUTHENTICATION.md](AUTHENTICATION.md).
     show cached private pages.
 - **CSRF:** Server Actions are POST-only and Next.js checks `Origin` against
   `Host`. The session cookie is `SameSite=Lax`.
+- **Bot protection:** sign-up, sign-in and password-reset requests support
+  Cloudflare Turnstile. The browser receives only the public site key; the
+  provider secret stays in Supabase Auth. Challenge tokens are forwarded only
+  to the matching Auth call and are never logged or persisted.
 - **Admin client:** no auth, onboarding or organization flow uses the secret
   key.
 
@@ -242,10 +246,9 @@ fail-closed:
 - **Last owner blocks account deletion.** This is intentional (no orphaned
   organizations), but account deletion UX must offer "transfer ownership" or
   "delete organization" first.
-- **Auth settings:** local config now requires email confirmation and
-  10-character passwords. **The hosted project must be configured the same
-  way** (dashboard → Authentication). It also needs SMTP, rate limits and
-  CAPTCHA before public launch.
+- **Auth settings:** hosted Auth requires email confirmation and 10-character
+  passwords, and custom SMTP is configured. Turnstile still needs a production
+  site/secret pair and activation after the CAPTCHA-enabled build is deployed.
 - **Same-device PKCE links:** the default confirmation and reset emails only
   work in the browser that started the flow. For cross-device links, switch
   the email templates to the `token_hash` form (supported by `/auth/callback`).

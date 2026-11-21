@@ -78,6 +78,7 @@ const registration = {
 
 beforeEach(() => {
   vi.stubEnv("NEXT_PUBLIC_SITE_URL", "http://localhost:3000");
+  vi.stubEnv("NEXT_PUBLIC_TURNSTILE_SITE_KEY", "");
 });
 
 afterEach(() => {
@@ -130,6 +131,58 @@ describe("signUpAction", () => {
     expect(result.ok).toBe(false);
     expect(!result.ok && result.fieldErrors?.acceptTerms).toBeTruthy();
     expect(client.auth.signUp).not.toHaveBeenCalled();
+  });
+
+  it("requires and forwards the CAPTCHA token when Turnstile is configured", async () => {
+    vi.stubEnv("NEXT_PUBLIC_TURNSTILE_SITE_KEY", "PLACEHOLDER-SITE-KEY");
+    const { client } = setup();
+
+    expect(await signUpAction(registration)).toEqual({
+      ok: false,
+      message: authMessages.captchaRequired,
+    });
+    expect(client.auth.signUp).not.toHaveBeenCalled();
+
+    await signUpAction({
+      ...registration,
+      captchaToken: "PLACEHOLDER-CAPTCHA-TOKEN",
+    });
+    expect(client.auth.signUp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({
+          captchaToken: "PLACEHOLDER-CAPTCHA-TOKEN",
+        }),
+      }),
+    );
+  });
+});
+
+describe("CAPTCHA-protected auth actions", () => {
+  it("forwards tokens to sign-in and password reset", async () => {
+    vi.stubEnv("NEXT_PUBLIC_TURNSTILE_SITE_KEY", "PLACEHOLDER-SITE-KEY");
+    const { client } = setup({ memberships: [] });
+
+    await expectRedirect(
+      signInAction({
+        email: "marko@primer.rs",
+        password: "x",
+        captchaToken: "PLACEHOLDER-SIGN-IN-CAPTCHA",
+      }),
+    );
+    expect(client.auth.signInWithPassword).toHaveBeenCalledWith({
+      email: "marko@primer.rs",
+      password: "x",
+      options: { captchaToken: "PLACEHOLDER-SIGN-IN-CAPTCHA" },
+    });
+
+    await requestPasswordResetAction({
+      email: "marko@primer.rs",
+      captchaToken: "PLACEHOLDER-RESET-CAPTCHA",
+    });
+    expect(client.auth.resetPasswordForEmail).toHaveBeenCalledWith(
+      "marko@primer.rs",
+      expect.objectContaining({ captchaToken: "PLACEHOLDER-RESET-CAPTCHA" }),
+    );
   });
 });
 

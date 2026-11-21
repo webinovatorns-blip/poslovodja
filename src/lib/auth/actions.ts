@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 
 import { withBasePath } from "@/config/base-path";
+import { getTurnstileSiteKey } from "@/config/captcha";
 import { routes } from "@/config/navigation";
 import { getSiteUrl } from "@/lib/env";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
@@ -41,6 +42,10 @@ async function serverClient() {
   }
 }
 
+function captchaMissing(token: string | undefined): boolean {
+  return Boolean(getTurnstileSiteKey() && !token);
+}
+
 function callbackUrl(next: string): string {
   return `${getSiteUrl()}${routes.authCallback}?next=${encodeURIComponent(next)}`;
 }
@@ -49,6 +54,10 @@ export async function signUpAction(input: RegisterInput): Promise<ActionResult> 
   const parsed = registerSchema.safeParse(input);
   if (!parsed.success) {
     return { ok: false, fieldErrors: fieldErrorsOf(parsed.error) };
+  }
+
+  if (captchaMissing(parsed.data.captchaToken)) {
+    return { ok: false, message: authMessages.captchaRequired };
   }
 
   const supabase = await serverClient();
@@ -62,6 +71,7 @@ export async function signUpAction(input: RegisterInput): Promise<ActionResult> 
       // Read by the on_auth_user_created trigger (trimmed and clamped there).
       data: { full_name: fullName },
       emailRedirectTo: callbackUrl(routes.onboarding),
+      ...(parsed.data.captchaToken ? { captchaToken: parsed.data.captchaToken } : {}),
     },
   });
 
@@ -89,6 +99,9 @@ export async function signInAction(input: LoginInput): Promise<ActionResult> {
   if (!parsed.success) {
     return { ok: false, fieldErrors: fieldErrorsOf(parsed.error) };
   }
+  if (captchaMissing(parsed.data.captchaToken)) {
+    return { ok: false, message: authMessages.captchaRequired };
+  }
 
   const supabase = await serverClient();
   if (!supabase) return { ok: false, message: authMessages.configurationMissing };
@@ -96,6 +109,9 @@ export async function signInAction(input: LoginInput): Promise<ActionResult> {
   const { data, error } = await supabase.auth.signInWithPassword({
     email: parsed.data.email,
     password: parsed.data.password,
+    ...(parsed.data.captchaToken
+      ? { options: { captchaToken: parsed.data.captchaToken } }
+      : {}),
   });
 
   if (error || !data.user) {
@@ -117,6 +133,9 @@ export async function requestPasswordResetAction(
   if (!parsed.success) {
     return { ok: false, fieldErrors: fieldErrorsOf(parsed.error) };
   }
+  if (captchaMissing(parsed.data.captchaToken)) {
+    return { ok: false, message: authMessages.captchaRequired };
+  }
 
   const supabase = await serverClient();
   if (supabase) {
@@ -124,6 +143,7 @@ export async function requestPasswordResetAction(
     // whether or not an account exists (no account enumeration).
     await supabase.auth.resetPasswordForEmail(parsed.data.email, {
       redirectTo: callbackUrl(routes.resetPassword),
+      ...(parsed.data.captchaToken ? { captchaToken: parsed.data.captchaToken } : {}),
     });
   }
 

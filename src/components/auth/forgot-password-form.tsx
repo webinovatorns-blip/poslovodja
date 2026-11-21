@@ -3,10 +3,12 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useForm } from "react-hook-form";
+import { useCallback } from "react";
+import { useForm, useWatch } from "react-hook-form";
 
 import { FormAlert } from "@/components/auth/form-alert";
 import { SubmitButton } from "@/components/auth/submit-button";
+import { TurnstileCaptcha } from "@/components/auth/turnstile-captcha";
 import {
   Form,
   FormControl,
@@ -17,21 +19,28 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { routes } from "@/config/navigation";
+import { getTurnstileSiteKey } from "@/config/captcha";
 import { useActionSubmit } from "@/hooks/use-action-submit";
 import { requestPasswordResetAction } from "@/lib/auth/actions";
 import { publicErrorMessage } from "@/lib/auth/messages";
 import { forgotPasswordSchema, type ForgotPasswordInput } from "@/lib/validations/auth";
 
 export function ForgotPasswordForm() {
+  const turnstileSiteKey = getTurnstileSiteKey();
   const searchParams = useSearchParams();
   const linkError = publicErrorMessage(searchParams.get("error"));
 
   const form = useForm<ForgotPasswordInput>({
     resolver: zodResolver(forgotPasswordSchema),
     mode: "onTouched",
-    defaultValues: { email: "" },
+    defaultValues: { email: "", captchaToken: undefined },
   });
   const { submit, isPending, result } = useActionSubmit(form, requestPasswordResetAction);
+  const captchaToken = useWatch({ control: form.control, name: "captchaToken" });
+  const setCaptchaToken = useCallback(
+    (token: string | undefined) => form.setValue("captchaToken", token),
+    [form],
+  );
 
   if (result?.ok) {
     return (
@@ -76,7 +85,19 @@ export function ForgotPasswordForm() {
           )}
         />
 
-        <SubmitButton pending={isPending} pendingLabel="Šaljemo…">
+        {turnstileSiteKey ? (
+          <TurnstileCaptcha
+            siteKey={turnstileSiteKey}
+            onTokenChange={setCaptchaToken}
+            resetKey={result}
+          />
+        ) : null}
+
+        <SubmitButton
+          pending={isPending}
+          disabled={Boolean(turnstileSiteKey && !captchaToken)}
+          pendingLabel="Šaljemo…"
+        >
           Pošalji uputstvo
         </SubmitButton>
 

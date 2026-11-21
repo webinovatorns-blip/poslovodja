@@ -165,6 +165,26 @@ appears only after a correct password, so it doesn't enable enumeration.
      It then continues into the app (dashboard or onboarding).
 4. The app stores no reset tokens. Supabase Auth handles them.
 
+## CAPTCHA protection
+
+The registration, sign-in and password-reset request forms support Cloudflare
+Turnstile. Set the public `NEXT_PUBLIC_TURNSTILE_SITE_KEY` at build time and
+configure the matching secret in hosted Supabase Auth → Attack Protection.
+When the public key is absent (the default for the local stack), the widget is
+not rendered and the existing local auth tests keep working.
+
+The widget response is short-lived. The client sends it as `captchaToken` to
+the matching Server Action, which validates the normal form first and then
+forwards the token only to `signUp`, `signInWithPassword` or
+`resetPasswordForEmail`. It is never logged, stored or included in a URL. A
+configured form cannot be submitted until the challenge succeeds, and a
+failed request resets the challenge before a retry. Supabase's
+`captcha_failed` code maps to a fixed Serbian message without upstream detail.
+
+Do not enable CAPTCHA in hosted Supabase until a production build containing
+the site key and these three protected forms is live. Otherwise all three Auth
+endpoints would reject requests without a token.
+
 ## Sign-out
 
 `signOutAction` makes these calls:

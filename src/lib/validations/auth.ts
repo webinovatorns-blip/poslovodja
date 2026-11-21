@@ -3,6 +3,8 @@ import { z } from "zod";
 import { emailField, requiredText } from "./common";
 import { validationMessages } from "./messages";
 
+const captchaTokenField = z.string().min(1).max(4096).optional();
+
 /**
  * Auth schemas shared by the client forms (React Hook Form + zodResolver)
  * and the server actions (which re-validate every request).
@@ -32,6 +34,7 @@ export const registerSchema = z
     acceptTerms: z.boolean().refine((value) => value, {
       error: validationMessages.termsRequired,
     }),
+    captchaToken: captchaTokenField,
   })
   .refine((data) => data.password === data.confirmPassword, {
     path: ["confirmPassword"],
@@ -47,12 +50,14 @@ export const loginSchema = z.object({
     error: validationMessages.required,
   }),
   next: z.string().optional(),
+  captchaToken: captchaTokenField,
 });
 
 export type LoginInput = z.input<typeof loginSchema>;
 
 export const forgotPasswordSchema = z.object({
   email: emailField,
+  captchaToken: captchaTokenField,
 });
 
 export type ForgotPasswordInput = z.input<typeof forgotPasswordSchema>;
