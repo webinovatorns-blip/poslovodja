@@ -5,3 +5,6 @@ playwright-report
 test-results
 package-lock.json
 next-env.d.ts
+# Supabase CLI local state (created by supabase link / start)
+supabase/.temp
+supabase/.branches
