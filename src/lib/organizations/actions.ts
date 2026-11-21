@@ -2,6 +2,7 @@
 
 import { redirect } from "next/navigation";
 
+import { withBasePath } from "@/config/base-path";
 import { routes } from "@/config/navigation";
 import { fieldErrorsOf, type ActionResult } from "@/lib/auth/action-result";
 import { isUuid } from "@/lib/auth/active-organization";
@@ -57,7 +58,7 @@ export async function createOrganizationAction(
   }
 
   await setActiveOrganizationCookie(organizationId);
-  redirect(routes.dashboard);
+  redirect(withBasePath(routes.dashboard));
 }
 
 /**
@@ -93,5 +94,5 @@ export async function switchOrganizationAction(
   }
 
   await setActiveOrganizationCookie(membership.organizationId);
-  redirect(safeRedirectPath(next, routes.dashboard));
+  redirect(withBasePath(safeRedirectPath(next, routes.dashboard)));
 }

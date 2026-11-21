@@ -11,6 +11,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { withBasePath } from "@/config/base-path";
 import { routes } from "@/config/navigation";
 import { roleLabels } from "@/config/roles";
 import { safeRedirectPath } from "@/lib/auth/redirects";
@@ -25,7 +26,7 @@ async function Picker({
 }) {
   const resolution = await getActiveOrganization();
   if (resolution.state === "none") {
-    redirect(routes.onboarding);
+    redirect(withBasePath(routes.onboarding));
   }
 
   const { next } = await searchParams;

@@ -48,3 +48,6 @@ next-env.d.ts
 /playwright-report/
 /blob-report/
 /playwright/.cache/
+
+# Supabase JWT signing keys (see supabase/config.toml signing_keys_path)
+supabase/signing_keys.json

@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { connection } from "next/server";
 import { cache } from "react";
 
+import { withBasePath } from "@/config/base-path";
 import { routes } from "@/config/navigation";
 import { withAuthDeadline } from "@/lib/supabase/request-timeout";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
@@ -207,7 +208,7 @@ const resolveForUser = cache(
 export async function requireUser(): Promise<CurrentUser> {
   const user = await getCurrentUser();
   if (!user) {
-    redirect(routes.login);
+    redirect(withBasePath(routes.login));
   }
   return user;
 }
@@ -218,7 +219,7 @@ export async function getActiveOrganization(): Promise<
 > {
   const authUser = await getAuthenticatedUser();
   if (!authUser) {
-    redirect(routes.login);
+    redirect(withBasePath(routes.login));
   }
   // Profile and memberships in parallel: when the Data API is down, the
   // page fails after one request timeout instead of two.
@@ -239,10 +240,10 @@ export async function requireOrganization(): Promise<OrganizationContext> {
   const resolution = await getActiveOrganization();
 
   if (resolution.state === "none") {
-    redirect(routes.onboarding);
+    redirect(withBasePath(routes.onboarding));
   }
   if (resolution.state === "needs-selection") {
-    redirect(routes.selectOrganization);
+    redirect(withBasePath(routes.selectOrganization));
   }
 
   return {
@@ -262,7 +263,7 @@ export async function requireOrganizationRole(
 ): Promise<OrganizationContext> {
   const context = await requireOrganization();
   if (!hasRole(context.organization.role, roles)) {
-    redirect(routes.dashboard);
+    redirect(withBasePath(routes.dashboard));
   }
   return context;
 }

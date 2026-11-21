@@ -2,6 +2,7 @@
 
 import { redirect } from "next/navigation";
 
+import { withBasePath } from "@/config/base-path";
 import { routes } from "@/config/navigation";
 import { getSiteUrl } from "@/lib/env";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
@@ -77,7 +78,7 @@ export async function signUpAction(input: RegisterInput): Promise<ActionResult> 
 
   if (data.session) {
     // Email confirmation is disabled: the user is signed in right away.
-    redirect(routes.onboarding);
+    redirect(withBasePath(routes.onboarding));
   }
 
   return { ok: true, message: authMessages.signUpCheckEmail };
@@ -106,7 +107,7 @@ export async function signInAction(input: LoginInput): Promise<ActionResult> {
     data.user.id,
     parsed.data.next ? safeRedirectPath(parsed.data.next) : null,
   );
-  redirect(destination);
+  redirect(withBasePath(destination));
 }
 
 export async function requestPasswordResetAction(
@@ -157,7 +158,9 @@ export async function updatePasswordAction(
     return { ok: false, message: authErrorMessage(error) };
   }
 
-  redirect(await resolvePostAuthPath(supabase, auth.user.id, routes.dashboard));
+  redirect(
+    withBasePath(await resolvePostAuthPath(supabase, auth.user.id, routes.dashboard)),
+  );
 }
 
 export async function signOutAction(): Promise<void> {
@@ -167,5 +170,5 @@ export async function signOutAction(): Promise<void> {
     await supabase.auth.signOut({ scope: "local" });
   }
   await clearActiveOrganizationCookie();
-  redirect(`${routes.login}?signed_out=1`);
+  redirect(withBasePath(`${routes.login}?signed_out=1`));
 }

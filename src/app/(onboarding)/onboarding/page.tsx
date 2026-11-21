@@ -11,6 +11,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { withBasePath } from "@/config/base-path";
 import { routes } from "@/config/navigation";
 import { getActiveOrganization } from "@/lib/auth/session";
 
@@ -20,7 +21,7 @@ export const metadata: Metadata = { title: "Podešavanje firme" };
 async function OnboardingGate() {
   const resolution = await getActiveOrganization();
   if (resolution.state !== "none") {
-    redirect(routes.dashboard);
+    redirect(withBasePath(routes.dashboard));
   }
   return <OnboardingForm />;
 }

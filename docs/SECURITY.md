@@ -147,6 +147,8 @@ Full flows are in [AUTHENTICATION.md](AUTHENTICATION.md).
   `safeRedirectPath()`, which accepts internal paths only and never
   `/auth/*`. Email links are built from `NEXT_PUBLIC_SITE_URL`, never from the
   request `Host` header.
+- **Subpath-safe redirects:** production builds set `NEXT_PUBLIC_BASE_PATH` to
+  `/poslovodja`; raw server and proxy redirects add that prefix explicitly.
 - **No account enumeration:**
   - registration shows the same message for new and existing emails;
   - forgot-password always shows the same neutral message;

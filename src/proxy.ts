@@ -1,6 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
+import { withBasePath } from "@/config/base-path";
 import { decideProxyRoute, isProtectedPath } from "@/lib/auth/route-rules";
 import { parsePublicEnv } from "@/lib/env";
 import {
@@ -74,7 +75,7 @@ export async function proxy(request: NextRequest) {
 
   if (decision.type === "redirect") {
     const redirectResponse = NextResponse.redirect(
-      new URL(decision.location, request.url),
+      new URL(withBasePath(decision.location), request.url),
     );
     // Keep refreshed session cookies on the redirect.
     for (const cookie of response.cookies.getAll()) {

@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import type { NextRequest } from "next/server";
 
+import { withBasePath } from "@/config/base-path";
 import { routes } from "@/config/navigation";
 import { callbackUnavailableResponse } from "@/lib/auth/callback-unavailable";
 import { safeRedirectPath } from "@/lib/auth/redirects";
@@ -63,7 +64,7 @@ export async function GET(request: NextRequest) {
   try {
     supabase = await createSupabaseServerClient();
   } catch {
-    redirect(failure);
+    redirect(withBasePath(failure));
   }
 
   const cookieStore = await cookies();
@@ -95,12 +96,12 @@ export async function GET(request: NextRequest) {
   }
 
   if (!userId) {
-    redirect(failure);
+    redirect(withBasePath(failure));
   }
 
   if (isRecovery) {
-    redirect(routes.resetPassword);
+    redirect(withBasePath(routes.resetPassword));
   }
 
-  redirect(await resolvePostAuthPath(supabase, userId, next));
+  redirect(withBasePath(await resolvePostAuthPath(supabase, userId, next)));
 }
