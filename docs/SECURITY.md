@@ -180,6 +180,25 @@ Full flows are in [AUTHENTICATION.md](AUTHENTICATION.md).
 - **Admin client:** no auth, onboarding or organization flow uses the secret
   key.
 
+## HTTP security headers
+
+`src/config/security-headers.ts`, applied in `next.config.ts` through
+`headers()`. With `basePath`, the rule matches only this app (`/poslovodja/*`),
+never other sites on the same domain.
+
+| Header                      | Value                                                     | Why                                                                                |
+| --------------------------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `Strict-Transport-Security` | `max-age=31536000`                                        | HTTPS only. No `includeSubDomains`/`preload`, because the domain hosts other sites |
+| `X-Content-Type-Options`    | `nosniff`                                                 | No MIME sniffing                                                                   |
+| `X-Frame-Options`           | `DENY`                                                    | Clickjacking (legacy browsers)                                                     |
+| `Content-Security-Policy`   | `frame-ancestors 'none'`                                  | Clickjacking (modern browsers)                                                     |
+| `Referrer-Policy`           | `strict-origin-when-cross-origin`                         | Don't leak paths/queries to other origins                                          |
+| `Permissions-Policy`        | camera, microphone, geolocation, payment and usb disabled | The app doesn't use them                                                           |
+
+A full script CSP is not set yet. It needs per-request nonces for Next.js
+inline scripts and must allow Cloudflare Turnstile. That is a planned,
+separately tested change.
+
 ## Verifying
 
 - `npm run db:test` runs about 145 pgTAP assertions, including the 12 tenant

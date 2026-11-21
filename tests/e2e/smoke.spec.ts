@@ -76,6 +76,17 @@ test("an invalid auth callback link shows a friendly error", async ({ page }) =>
   );
 });
 
+test("pages send security headers", async ({ request }) => {
+  for (const path of ["/", "/login"]) {
+    const headers = (await request.get(path)).headers();
+    expect(headers["x-content-type-options"], path).toBe("nosniff");
+    expect(headers["x-frame-options"], path).toBe("DENY");
+    expect(headers["content-security-policy"], path).toBe("frame-ancestors 'none'");
+    expect(headers["referrer-policy"], path).toBe("strict-origin-when-cross-origin");
+    expect(headers["strict-transport-security"], path).toBe("max-age=31536000");
+  }
+});
+
 test("unknown route shows the 404 page", async ({ page }) => {
   const response = await page.goto("/ne-postoji");
   expect(response?.status()).toBe(404);
