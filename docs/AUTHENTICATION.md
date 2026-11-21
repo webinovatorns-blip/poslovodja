@@ -345,6 +345,7 @@ timeout. This is server-side work only, and these flows don't use it.
 | `NEXT_PUBLIC_SUPABASE_URL`             | All Supabase clients, proxy                  |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | All Supabase clients, proxy                  |
 | `NEXT_PUBLIC_SITE_URL`                 | Links in auth emails (never the Host header) |
+| `NEXT_PUBLIC_BASE_PATH`                | Build-time app mount path                    |
 | `SUPABASE_SECRET_KEY`                  | Admin client only (not used by these flows)  |
 | `SUPABASE_REQUEST_TIMEOUT_MS`          | Optional, server only: request timeout (6 s) |
 | `SUPABASE_AUTH_DEADLINE_MS`            | Optional, server only: Auth deadline (7 s)   |
@@ -358,12 +359,12 @@ server logs the missing variable **names** at start in development.
 Local settings live in `supabase/config.toml`. Mirror them in the hosted
 dashboard.
 
-| Setting                             | Value                                                 |
-| ----------------------------------- | ----------------------------------------------------- |
-| `site_url`                          | `http://localhost:3000` (production: the real domain) |
-| `additional_redirect_urls`          | `…/auth/callback` for every origin the app runs on    |
-| `minimum_password_length`           | `10` (= `PASSWORD_MIN_LENGTH`)                        |
-| `[auth.email] enable_confirmations` | `true`                                                |
+| Setting                             | Value                                                                              |
+| ----------------------------------- | ---------------------------------------------------------------------------------- |
+| `site_url`                          | `http://localhost:3000` (production: full public app URL, including its base path) |
+| `additional_redirect_urls`          | `…/auth/callback` for every origin the app runs on                                 |
+| `minimum_password_length`           | `10` (= `PASSWORD_MIN_LENGTH`)                                                     |
+| `[auth.email] enable_confirmations` | `true`                                                                             |
 
 ## Local testing
 
