@@ -81,6 +81,8 @@ export function authErrorMessage(error: ErrorLike): string {
     case "over_request_rate_limit":
     case "over_email_send_rate_limit":
       return authMessages.rateLimited;
+    case "captcha_failed":
+      return authMessages.captchaRequired;
     case "weak_password":
       return authMessages.weakPassword;
     case "same_password":

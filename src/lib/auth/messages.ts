@@ -9,6 +9,7 @@ export const authMessages = {
   emailNotConfirmed:
     "E-mail adresa još nije potvrđena. Proverite poštu i kliknite na link za potvrdu.",
   rateLimited: "Previše pokušaja. Sačekajte malo pa pokušajte ponovo.",
+  captchaRequired: "Potvrdite bezbednosnu proveru i pokušajte ponovo.",
   weakPassword: "Lozinka nije dovoljno jaka. Izaberite dužu ili složeniju lozinku.",
   samePassword: "Nova lozinka mora biti različita od trenutne.",
   signUpCheckEmail:

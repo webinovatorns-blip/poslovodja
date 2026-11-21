@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const actions = vi.hoisted(() => ({
   createOrganizationAction: vi.fn(),
@@ -24,7 +24,10 @@ import { OnboardingForm } from "@/components/onboarding/onboarding-form";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubEnv("NEXT_PUBLIC_TURNSTILE_SITE_KEY", "");
 });
+
+afterEach(() => vi.unstubAllEnvs());
 
 async function fillOnboarding(user: ReturnType<typeof userEvent.setup>) {
   await user.type(screen.getByLabelText("Naziv firme ili radnje"), "Klima Servis Marko");
@@ -124,6 +127,13 @@ describe("ForgotPasswordForm", () => {
 });
 
 describe("RegisterForm", () => {
+  it("keeps submission disabled until the configured CAPTCHA is complete", () => {
+    vi.stubEnv("NEXT_PUBLIC_TURNSTILE_SITE_KEY", "PLACEHOLDER-SITE-KEY");
+    render(<RegisterForm />);
+    expect(screen.getByRole("button", { name: "Napravi nalog" })).toBeDisabled();
+    expect(screen.getByText(/Bezbednosna provera/)).toBeInTheDocument();
+  });
+
   it("[1]-[5] validates in the browser with the shared schema before calling the server", async () => {
     const user = userEvent.setup();
     render(<RegisterForm />);

@@ -3,10 +3,12 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { MailCheck } from "lucide-react";
 import Link from "next/link";
-import { useForm } from "react-hook-form";
+import { useCallback } from "react";
+import { useForm, useWatch } from "react-hook-form";
 
 import { FormAlert } from "@/components/auth/form-alert";
 import { SubmitButton } from "@/components/auth/submit-button";
+import { TurnstileCaptcha } from "@/components/auth/turnstile-captcha";
 import {
   Form,
   FormControl,
@@ -17,6 +19,7 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { routes } from "@/config/navigation";
+import { getTurnstileSiteKey } from "@/config/captcha";
 import { useActionSubmit } from "@/hooks/use-action-submit";
 import { signUpAction } from "@/lib/auth/actions";
 import {
@@ -26,6 +29,7 @@ import {
 } from "@/lib/validations/auth";
 
 export function RegisterForm() {
+  const turnstileSiteKey = getTurnstileSiteKey();
   const form = useForm<RegisterInput>({
     resolver: zodResolver(registerSchema),
     mode: "onTouched",
@@ -35,9 +39,15 @@ export function RegisterForm() {
       password: "",
       confirmPassword: "",
       acceptTerms: false,
+      captchaToken: undefined,
     },
   });
   const { submit, isPending, result } = useActionSubmit(form, signUpAction);
+  const captchaToken = useWatch({ control: form.control, name: "captchaToken" });
+  const setCaptchaToken = useCallback(
+    (token: string | undefined) => form.setValue("captchaToken", token),
+    [form],
+  );
 
   if (result?.ok) {
     return (
@@ -153,7 +163,19 @@ export function RegisterForm() {
           )}
         />
 
-        <SubmitButton pending={isPending} pendingLabel="Pravimo nalog…">
+        {turnstileSiteKey ? (
+          <TurnstileCaptcha
+            siteKey={turnstileSiteKey}
+            onTokenChange={setCaptchaToken}
+            resetKey={result}
+          />
+        ) : null}
+
+        <SubmitButton
+          pending={isPending}
+          disabled={Boolean(turnstileSiteKey && !captchaToken)}
+          pendingLabel="Pravimo nalog…"
+        >
           Napravi nalog
         </SubmitButton>
 
